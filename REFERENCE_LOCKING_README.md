@@ -16,6 +16,21 @@ Top-level control flow:
 4. Average phase over multiple seconds (`DISC_AVERAGE_SECS`).
 5. Apply PI correction to DAC/EFC.
 
+Control-loop signal flow:
+
+```mermaid
+flowchart LR
+	OCXO["10 MHz OCXO"] --> EDGE["PWM edge counter\n(count 10 MHz edges)"]
+	GPS["GPS 1PPS"] --> PPS["PIO PPS capture ISR\n(sample counter + timestamp)"]
+	EDGE --> PPS
+
+	PPS --> OBS["Per-second observables\nphase_error_ns, pulse_count, measured_hz"]
+	OBS --> AVG["Phase averaging\nDISC_AVERAGE_SECS"]
+	AVG --> PI["Discipliner PI controller"]
+	PI --> DAC["MCP4725 DAC / EFC voltage"]
+	DAC --> OCXO
+```
+
 ---
 
 ## 2) Measurement architecture (current)
@@ -25,7 +40,8 @@ Top-level control flow:
 - A PIO state machine detects PPS edges.
 - `PIO0_IRQ_0` ISR timestamps the edge using `timer_hw->timerawl` (microsecond counter).
 
-So PPS interval resolution in the present implementation is based on 1 µs timer ticks.
+So PPS interval / phase observable resolution in the present implementation is based on 1 µs timer ticks.
+This applies to timestamp-derived phase error, not to the 10 MHz edge-count observable itself.
 
 ### 2.2 10 MHz pulse counting per PPS window
 
@@ -114,7 +130,8 @@ Examples:
 - 150 MHz → ~6.67 ns
 
 Those values are the hardware clock period scale.
-Current PPS interval timestamping is still read via microsecond timer in ISR, while the frequency observable now uses PPS-gated 10 MHz edge counting.
+Current PPS interval timestamping (used for phase error) is still read via microsecond timer in ISR.
+The frequency observable is based on PPS-gated 10 MHz edge counting, with timer quantization entering through the interval term in $f_{meas}=N/T$.
 
 ---
 
