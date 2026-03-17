@@ -124,6 +124,8 @@ static const uint32_t ADF2_REGS[6] = {
 
 // Frequency counter gate time (seconds)
 #define FREQ_GATE_SECS      1
+// Number of PPS samples to average before applying PI correction.
+#define DISC_AVERAGE_SECS   8
 
 // ============================================================
 // Status / Alarm
@@ -170,8 +172,8 @@ static const uint32_t ADF2_REGS[6] = {
 // Enable verbose JSON trace events for debug/instrumentation.
 #define ADF_TRACE_ENABLED 0
 
-// Enable frequency counter PIO state machine (set 0 to disable)
-#define USE_FREQ_COUNTER    0
+// Enable 10MHz pulse counting between PPS edges (PWM hardware counter).
+#define USE_FREQ_COUNTER    1
 
 // Test switch: disable core1 timing engine initialization to isolate
 // commit/pause behavior from timing IRQ activity.

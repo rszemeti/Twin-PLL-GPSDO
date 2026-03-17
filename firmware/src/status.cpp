@@ -218,6 +218,8 @@ void StatusManager::printDebug() {
         case DiscState::FREERUN:   doc["disc_state"] = "FREERUN"; break;
     }
     doc["phase_error_ns"] = _disc.phaseError();
+    doc["disc_avg_window_s"] = DISC_AVERAGE_SECS;
+    doc["disc_avg_phase_ns"] = _disc.phaseError();
     doc["dac_value"] = _disc.dacValue();
     doc["freq_ppb"] = _disc.frequency();
     doc["adf1_locked"] = _adf1.isLocked();

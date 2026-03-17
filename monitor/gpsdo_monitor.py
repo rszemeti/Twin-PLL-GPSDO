@@ -273,6 +273,8 @@ class MainWindow(QWidget):
         self.hdop = QLabel('')
         self.disc_state = QLabel('')
         self.phase_error = QLabel('')
+        self.disc_avg_window = QLabel('')
+        self.disc_avg_phase = QLabel('')
         self.dac_value = QLabel('')
         self.adf1_locked = QLabel('')
         self.adf2_locked = QLabel('')
@@ -290,11 +292,13 @@ class MainWindow(QWidget):
         self.hdop.setStyleSheet('font-weight: 700; color: #aeb7c2;')
         grid.addWidget(QLabel('Disc State'), 8, 0); grid.addWidget(self.disc_state, 8, 1)
         grid.addWidget(QLabel('Phase error (ns)'), 9, 0); grid.addWidget(self.phase_error, 9, 1)
-        grid.addWidget(QLabel('DAC Value'), 10, 0); grid.addWidget(self.dac_value, 10, 1)
-        grid.addWidget(QLabel('adf1_locked'), 11, 0); grid.addWidget(self.adf1_locked, 11, 1)
-        grid.addWidget(QLabel('adf2_locked'), 12, 0); grid.addWidget(self.adf2_locked, 12, 1)
-        grid.addWidget(QLabel('adf1 decoded'), 13, 0); grid.addWidget(self.adf1_freq, 13, 1)
-        grid.addWidget(QLabel('adf2 decoded'), 14, 0); grid.addWidget(self.adf2_freq, 14, 1)
+        grid.addWidget(QLabel('Disc avg window (s)'), 10, 0); grid.addWidget(self.disc_avg_window, 10, 1)
+        grid.addWidget(QLabel('Disc avg phase (ns)'), 11, 0); grid.addWidget(self.disc_avg_phase, 11, 1)
+        grid.addWidget(QLabel('DAC Value'), 12, 0); grid.addWidget(self.dac_value, 12, 1)
+        grid.addWidget(QLabel('adf1_locked'), 13, 0); grid.addWidget(self.adf1_locked, 13, 1)
+        grid.addWidget(QLabel('adf2_locked'), 14, 0); grid.addWidget(self.adf2_locked, 14, 1)
+        grid.addWidget(QLabel('adf1 decoded'), 15, 0); grid.addWidget(self.adf1_freq, 15, 1)
+        grid.addWidget(QLabel('adf2 decoded'), 16, 0); grid.addWidget(self.adf2_freq, 16, 1)
 
         status_box.setLayout(grid)
 
@@ -389,12 +393,20 @@ class MainWindow(QWidget):
 
         # Details tab (logs and internals)
         details_tab = QWidget()
-        details_layout = QVBoxLayout(details_tab)
-        details_layout.addWidget(status_box)
-        details_layout.addWidget(regs_box)
-        details_layout.addWidget(QLabel('Log'))
-        details_layout.addWidget(self.log_text)
-        details_layout.addLayout(send_layout)
+        details_layout = QHBoxLayout(details_tab)
+
+        details_left = QVBoxLayout()
+        details_left.addWidget(status_box)
+        details_left.addLayout(send_layout)
+        details_left.addStretch(1)
+
+        details_right = QVBoxLayout()
+        details_right.addWidget(regs_box)
+        details_right.addWidget(QLabel('Log'))
+        details_right.addWidget(self.log_text)
+
+        details_layout.addLayout(details_left, 1)
+        details_layout.addLayout(details_right, 1)
 
         # About tab
         about_tab = QWidget()
@@ -736,6 +748,10 @@ class MainWindow(QWidget):
                 self.disc_state.setText(disc_state)
             if 'phase_error_ns' in obj:
                 self.phase_error.setText(str(obj.get('phase_error_ns')))
+            if 'disc_avg_window_s' in obj:
+                self.disc_avg_window.setText(str(obj.get('disc_avg_window_s')))
+            if 'disc_avg_phase_ns' in obj:
+                self.disc_avg_phase.setText(str(obj.get('disc_avg_phase_ns')))
             if 'dac_value' in obj:
                 self.dac_value.setText(str(obj.get('dac_value')))
             if 'adf1_locked' in obj:

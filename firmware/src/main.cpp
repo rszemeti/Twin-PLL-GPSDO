@@ -990,10 +990,22 @@ void loop() {
 
     bool gpsGood = gs.hasFix && gs.ppsValid;
 
-    // Feed phase error to disciplining PI loop
+    // Feed averaged phase error to disciplining PI loop
+    static int64_t phaseAccumNs = 0;
+    static uint32_t phaseAccumCount = 0;
     if (tr.ppsValid) {
-        disc.update((int32_t)tr.phaseError_ns, gpsGood);
+        phaseAccumNs += tr.phaseError_ns;
+        phaseAccumCount++;
+
+        if (phaseAccumCount >= DISC_AVERAGE_SECS) {
+            int32_t averagedPhaseNs = (int32_t)(phaseAccumNs / (int64_t)phaseAccumCount);
+            disc.update(averagedPhaseNs, gpsGood);
+            phaseAccumNs = 0;
+            phaseAccumCount = 0;
+        }
     } else if (!gpsGood) {
+        phaseAccumNs = 0;
+        phaseAccumCount = 0;
         disc.update(0, false);
     }
 
@@ -1004,6 +1016,7 @@ void loop() {
             lastFreqLog = millis();
             StaticJsonDocument<192> dj;
             dj["event"] = "ocxo";
+            dj["pulse_count"] = tr.freqPulseCount;
             dj["measured_hz"] = tr.measuredFreq_Hz;
             dj["freq_error_ppb"] = tr.freqError_ppb;
             serializeJson(dj, Serial);

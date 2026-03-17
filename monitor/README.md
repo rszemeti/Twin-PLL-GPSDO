@@ -2,6 +2,9 @@ GPSDO Monitor
 
 A minimal PySide6 GUI that connects to the device over serial, parses JSON status lines, and displays key fields.
 
+Full software manual:
+- See `docs/MONITOR_USER_MANUAL.md` for complete usage, workflows, and troubleshooting.
+
 Setup
 
 python -m venv .venv

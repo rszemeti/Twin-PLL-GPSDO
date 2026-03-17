@@ -3,6 +3,7 @@
 #include "gps.h"
 #include "hardware/pio.h"
 #include "hardware/clocks.h"
+#include "hardware/pwm.h"
 #include "pico/critical_section.h"
 
 // Forward declaration - GPS parser is instantiated in main.cpp
@@ -48,28 +49,6 @@ static const uint16_t pps_program_instructions[] = {
     0x0000,  // jmp 0        (loop)
 };
 
-// Frequency counter PIO program - hand assembled
-// Counts sysclk cycles for 10 OCXO edges
-// wait 0 pin 0  0x2020
-// wait 1 pin 0  0x2060
-// set x, 8      0xe008  (count 9 more edges = 10 total)
-// wait 0 pin 0  0x2020
-// wait 1 pin 0  0x2060
-// jmp x-- 3     0x0043  (back to wait 0 pin 0, 3rd instruction)
-// in isr, 32   -- we use timer delta instead, push sentinel
-// irq set 1     0xc001
-// jmp 0         0x0000
-static const uint16_t freq_program_instructions[] = {
-    0x2020,  // wait 0 pin 0
-    0x2060,  // wait 1 pin 0  (first edge)
-    0xe008,  // set x, 8      (count 9 more edges)
-    0x2020,  // wait 0 pin 0
-    0x2060,  // wait 1 pin 0  (next edge)
-    0x0043,  // jmp x-- 3     (back to wait 0 if x-- != 0)
-    0xc001,  // irq set 1     (done - signal IRQ1)
-    0x0000,  // jmp 0         (loop)
-};
-
 // ============================================================
 // Hardware timer for timestamping (1MHz, 64-bit)
 // ============================================================
@@ -100,12 +79,8 @@ static void pps_irq_handler() {
     pio_interrupt_clear(pio0, 0);
 }
 
-static void freq_irq_handler() {
-    uint32_t ts = timer_us();
-    if (_instance) {
-        _instance->processFreq(ts);
-    }
-    pio_interrupt_clear(pio0, 1);
+static void pwm_wrap_irq_handler() {
+    if (_instance) _instance->onPwmWrapIrq();
 }
 
 // ============================================================
@@ -122,8 +97,13 @@ PIOTimingEngine::PIOTimingEngine(uint8_t ppsPin, uint8_t freqPin)
       _prevPPScycles(0),
       _ppsCount(0),
       _firstPPS(true),
-            _resultReady(false),
-            _syncReady(false) {
+    _resultReady(false),
+    _syncReady(false),
+    _freqSlice(0),
+    _lastFreqCounter(0),
+    _lastFreqWraps(0),
+    _freqWrapCount(0),
+    _firstFreqWindow(true) {
     memset(&_result, 0, sizeof(_result));
 }
 
@@ -134,7 +114,7 @@ bool PIOTimingEngine::begin() {
 
     if (!initPPSsm())  return false;
 #if USE_FREQ_COUNTER
-    if (!initFreqSM()) return false;
+    if (!initFreqCounter()) return false;
 #else
     // Frequency SM disabled by config - leave it uninitialised to avoid
     // spurious/high-rate IRQs when no 10MHz reference is present.
@@ -177,32 +157,29 @@ bool PIOTimingEngine::initPPSsm() {
     return true;
 }
 
-bool PIOTimingEngine::initFreqSM() {
-    pio_program_t prog;
-    prog.instructions = freq_program_instructions;
-    prog.length       = count_of(freq_program_instructions);
-    prog.origin       = -1;
+bool PIOTimingEngine::initFreqCounter() {
+    // Use PWM edge counter mode on the B input pin of this slice.
+    // For GPIO3 (default), this is slice 1 channel B.
+    gpio_set_function(_freqPin, GPIO_FUNC_PWM);
+    _freqSlice = pwm_gpio_to_slice_num(_freqPin);
 
-    if (!pio_can_add_program(_pio, &prog)) return false;
-    uint offset = pio_add_program(_pio, &prog);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv_mode(&cfg, PWM_DIV_B_RISING);
+    pwm_config_set_wrap(&cfg, 0xFFFF);
 
-    pio_sm_config c = pio_get_default_sm_config();
-    sm_config_set_wrap(&c, offset, offset + prog.length - 1);
-    sm_config_set_in_pins(&c, _freqPin);
-    sm_config_set_jmp_pin(&c, _freqPin);
-    sm_config_set_clkdiv(&c, 1.0f);
+    pwm_init(_freqSlice, &cfg, false);
+    pwm_set_counter(_freqSlice, 0);
+    _freqWrapCount = 0;
+    _lastFreqCounter = 0;
+    _lastFreqWraps = 0;
+    _firstFreqWindow = true;
 
-    pio_sm_set_consecutive_pindirs(_pio, _freqSM, _freqPin, 1, false);
-    gpio_pull_down(_freqPin);
+    pwm_clear_irq(_freqSlice);
+    pwm_set_irq_enabled(_freqSlice, true);
+    irq_set_exclusive_handler(PWM_IRQ_WRAP, pwm_wrap_irq_handler);
+    irq_set_enabled(PWM_IRQ_WRAP, true);
 
-    pio_sm_init(_pio, _freqSM, offset, &c);
-
-    // Set up PIO IRQ1 → CPU IRQ
-    pio_set_irq1_source_enabled(_pio, pis_interrupt1, true);
-    irq_set_exclusive_handler(PIO0_IRQ_1, freq_irq_handler);
-    irq_set_enabled(PIO0_IRQ_1, true);
-
-    pio_sm_set_enabled(_pio, _freqSM, true);
+    pwm_set_enabled(_freqSlice, true);
     return true;
 }
 
@@ -235,6 +212,42 @@ void PIOTimingEngine::processPPS(uint32_t ts_us) {
     _result.phaseError_ns   = error_ns;
     _result.ppsCycleCount   = interval_us;
     _result.ppsCount        = _ppsCount;
+
+#if USE_FREQ_COUNTER
+    const uint32_t wraps = _freqWrapCount;
+    const uint16_t counter = pwm_get_counter(_freqSlice);
+
+    if (_firstFreqWindow) {
+        _firstFreqWindow = false;
+        _lastFreqWraps = wraps;
+        _lastFreqCounter = counter;
+        _result.freqValid = false;
+    } else {
+        const uint32_t deltaWraps = wraps - _lastFreqWraps;
+        const int32_t deltaCounter = (int32_t)counter - (int32_t)_lastFreqCounter;
+        const uint32_t pulseCount = (deltaWraps * 65536u) + (uint32_t)(deltaCounter & 0xFFFF);
+
+        _lastFreqWraps = wraps;
+        _lastFreqCounter = counter;
+
+        if (interval_us > 0) {
+            const double interval_s = (double)interval_us / 1e6;
+            const double measuredFreq = (double)pulseCount / interval_s;
+            const double error_ppb = ((measuredFreq - _ocxoHz) / _ocxoHz) * 1e9;
+
+            _result.freqValid = true;
+            _result.freqPulseCount = pulseCount;
+            _result.measuredFreq_Hz = measuredFreq;
+            _result.freqError_ppb = error_ppb;
+            _result.freqCycleCount = interval_us;
+        } else {
+            _result.freqValid = false;
+        }
+    }
+#else
+    _result.freqValid = false;
+#endif
+
     _resultReady            = true;
     critical_section_exit(&_cs);
 }
@@ -244,32 +257,14 @@ void PIOTimingEngine::processPPS(uint32_t ts_us) {
 // ts = hardware timer in us at the 10th edge
 // ============================================================
 void PIOTimingEngine::processFreq(uint32_t ts_us) {
-    static uint32_t prevFreqTs = 0;
-    static bool firstFreq = true;
+    (void)ts_us;
+}
 
-    if (firstFreq) {
-        firstFreq   = false;
-        prevFreqTs  = ts_us;
-        return;
+void PIOTimingEngine::onPwmWrapIrq() {
+    if (pwm_get_irq_status_mask() & (1u << _freqSlice)) {
+        pwm_clear_irq(_freqSlice);
+        _freqWrapCount++;
     }
-
-    uint32_t elapsed_us = ts_us - prevFreqTs;
-    prevFreqTs = ts_us;
-
-    // 10 OCXO cycles elapsed in elapsed_us microseconds
-    // Measured frequency = 10 / (elapsed_us * 1e-6) Hz
-    //                    = 10,000,000 / elapsed_us Hz
-    if (elapsed_us == 0) return;
-
-    double measuredFreq = 10000000.0 / (double)elapsed_us;
-    double error_ppb    = ((measuredFreq - _ocxoHz) / _ocxoHz) * 1e9;
-
-    critical_section_enter_blocking(&_cs);
-    _result.freqValid       = true;
-    _result.measuredFreq_Hz = measuredFreq;
-    _result.freqError_ppb   = error_ppb;
-    _result.freqCycleCount  = elapsed_us;
-    critical_section_exit(&_cs);
 }
 
 // ============================================================

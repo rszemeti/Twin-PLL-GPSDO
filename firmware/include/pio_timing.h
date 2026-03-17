@@ -26,9 +26,10 @@ struct TimingResult {
 
     // OCXO frequency measurement
     bool     freqValid;
+    uint32_t freqPulseCount;     // number of 10MHz edges in the last PPS interval
     double   measuredFreq_Hz;    // measured OCXO frequency
     double   freqError_ppb;      // error in parts per billion
-    uint32_t freqCycleCount;     // raw counter value
+    uint32_t freqCycleCount;     // PPS interval in microseconds used for freq calc
 };
 
 class PIOTimingEngine {
@@ -72,12 +73,21 @@ private:
     volatile bool _syncReady;
 
     bool initPPSsm();
-    bool initFreqSM();
+    bool initFreqCounter();
 public:
     // Called from IRQ handlers on Core1 - made public so IRQ C functions
     // can call into the instance without being friends.
     void processPPS(uint32_t cycleCount);
     void processFreq(uint32_t rawCount);
+    void onPwmWrapIrq();
+
+private:
+    // Frequency pulse counting via PWM edge counter on _freqPin.
+    uint     _freqSlice;
+    uint16_t _lastFreqCounter;
+    uint32_t _lastFreqWraps;
+    volatile uint32_t _freqWrapCount;
+    bool     _firstFreqWindow;
 };
 
 // Global instance accessible from both cores
