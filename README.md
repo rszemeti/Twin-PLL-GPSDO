@@ -2,8 +2,8 @@
 
 A dual-output GPS-disciplined reference project for Raspberry Pi Pico 2 (RP2350), with:
 - Firmware for GPSDO control + PLL programming
-- A desktop monitor/config tool (Windows-friendly)
-- Release artifacts (`.uf2` firmware + monitor `.exe`) via GitHub Releases
+- A desktop configuration tool (Windows-friendly)
+- Release artifacts (`.uf2` firmware + configuration tool `.exe` + PDF user manual) via GitHub Releases
 
 ## Who this is for
 This README is for users who want to **flash**, **run**, and **use** the project without digging through source code first.
@@ -12,7 +12,7 @@ This README is for users who want to **flash**, **run**, and **use** the project
 - **Output 1 / Output 2 PLL control** from the GUI
 - **Persistent settings** (ADF register writes are auto-committed to EEPROM)
 - **Live status** (GPS fix/lock, satellites, DOP, alarm, lock states)
-- **Dark-themed monitor UI** with Main/Details/About tabs
+- **Windows configuration tool** with Main/Details/Advamced/About tabs
 
 ## RF/output notes (important)
 - **Two outputs are fully independent**: each PLL output has its own register set and can be tuned separately.
@@ -31,7 +31,7 @@ This README is for users who want to **flash**, **run**, and **use** the project
 
 ## Repository layout
 - `firmware/` – PlatformIO project for Pico 2
-- `monitor/` – Python GUI monitor/config app
+- `monitor/` – Python GUI configuration tool app
 - `.github/workflows/` – release build automation
 - `REFERENCE_LOCKING_README.md` – technical notes on GPS reference locking, PIO timing, interrupts, and timing/error budget
 
@@ -39,14 +39,14 @@ This README is for users who want to **flash**, **run**, and **use** the project
 ### 1) Download a Release
 From GitHub Releases, download:
 - `Twin-PLL-GPSDO-<tag>.uf2` (firmware)
-- `TwinPLLGPSDOMonitor-<tag>.exe` (Windows monitor)
+- `TwinPLLGPSDOMonitor-<tag>.exe` (Windows configuration tool)
 
 ### 2) Flash firmware (`.uf2`)
 1. Put Pico 2 into BOOTSEL mode.
 2. Copy the `.uf2` file to the mounted RP drive.
 3. Board reboots automatically.
 
-### 3) Run the monitor (`.exe`)
+### 3) Run the configuration tool (`.exe`)
 1. Start `TwinPLLGPSDOMonitor-<tag>.exe`.
 2. Select COM port and click **Connect**.
 3. Use **Set O/P 1** / **Set O/P 2** to configure outputs.
@@ -69,7 +69,7 @@ Upload (example COM port):
 python -m platformio run -t upload --upload-port COM7
 ```
 
-## Monitor (Python)
+## Configuration tool (Python)
 Prerequisites:
 - Python 3.11+
 
@@ -82,43 +82,28 @@ pip install -r requirements.txt
 python gpsdo_monitor.py
 ```
 
-## Monitor usage notes
+## Configuration tool usage notes
 - **Main tab**: front-panel style status + output frequencies + output set buttons
 - **Details tab**: logs, decoded registers, DAC/state details
 - **About tab**: project links and author links
 
-The monitor supports JSON command send for advanced/manual control.
-
-## Regenerate manual screenshots
-The monitor manual screenshots are generated from app widgets/dialogs (not desktop capture).
-
-From repository root:
-```bash
-python monitor/tools/capture_manual_screens.py
-```
-
-Windows (using project venv) from repository root:
-```powershell
-\.venv\Scripts\python.exe .\monitor\tools\capture_manual_screens.py
-```
-
-This updates images in `docs/screenshots/` used by `docs/MONITOR_USER_MANUAL.md`.
+The configuration tool supports JSON command send for advanced/manual control.
 
 ## Persistence behavior
 When a PLL/program command is applied:
 - Registers are staged
 - EEPROM auto-commit is performed in firmware
-- On success, firmware emits a success event and monitor shows **Device Updated**
+- On success, firmware emits a success event and the configuration tool shows **Device Updated**
 
 ## Releases and updates
 On published release, GitHub Actions builds and attaches:
 - Firmware UF2
-- Monitor one-file EXE
+- Configuration tool one-file EXE
 
 So most users can update without local toolchains.
 
 ## Troubleshooting
-- **Monitor cannot connect**: verify correct COM port and close other serial tools.
+- **Configuration tool cannot connect**: verify correct COM port and close other serial tools.
 - **No lock / unstable GPS**: verify antenna visibility and allow warm-up time.
 - **Upload issues on Windows**: retry BOOTSEL entry and ensure USB cable supports data.
 

@@ -1,12 +1,12 @@
-# Twin PLL GPSDO Monitor — User Manual
+# Twin PLL GPSDO Configuration Tool — User Manual
 
 **Release Version:** `{{RELEASE_TAG}}`
 
-This manual covers the desktop monitor software (`monitor/gpsdo_monitor.py` / packaged EXE).
+This manual covers the desktop configuration tool software (`monitor/gpsdo_monitor.py` / packaged EXE).
 
 ## 1. What the monitor does
 
-The monitor is the control and visibility front-end for your Twin PLL GPSDO firmware.
+The configuration tool is the control and visibility front-end for your Twin PLL GPSDO firmware.
 
 You can:
 - connect to the device over serial,
@@ -19,12 +19,12 @@ You can:
 ## 2. Start-up
 
 ### 2.1 Connect
-1. Launch the monitor.
+1. Launch the configuration tool.
 2. Select the correct COM port.
 3. Select baud (normally `115200`).
 4. Click **Connect**.
 
-After connecting, the monitor automatically requests device info and ADF register snapshots.
+After connecting, the configuration tool automatically requests device info and ADF register snapshots.
 
 ### 2.2 If connection fails
 - Verify the COM port is correct.
@@ -121,7 +121,7 @@ Accepted forms include:
 - `R5: 0x00580005`
 - comma-separated values
 
-The monitor validates count and range, then maps to firmware `R0..R5` payload order automatically.
+The configuration tool validates count and range, then maps to firmware `R0..R5` payload order automatically.
 
 ### 6.3 Program behavior
 On OK, monitor sends:
@@ -191,7 +191,7 @@ Important distinction:
 
 ## 9. EEPROM/write success behavior
 
-When firmware confirms successful EEPROM write, monitor shows a **Device Updated** popup and logs the associated JSON event.
+When firmware confirms successful EEPROM write, the configuration tool shows a **Device Updated** popup and logs the associated JSON event.
 
 ---
 
