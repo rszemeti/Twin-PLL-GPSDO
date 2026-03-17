@@ -1,5 +1,7 @@
 # Twin PLL GPSDO Monitor — User Manual
 
+**Release Version:** `{{RELEASE_TAG}}`
+
 This manual covers the desktop monitor software (`monitor/gpsdo_monitor.py` / packaged EXE).
 
 ## 1. What the monitor does
@@ -37,6 +39,10 @@ The application has three main tabs:
 - **Main**
 - **Details**
 - **About**
+
+Screenshot source:
+- The screenshots in this manual are generated directly from monitor Qt widgets/dialogs using `monitor/tools/capture_manual_screens.py`.
+- They are application captures (not full-desktop screenshots).
 
 ## 4. Main tab
 

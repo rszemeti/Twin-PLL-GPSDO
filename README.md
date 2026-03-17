@@ -89,6 +89,21 @@ python gpsdo_monitor.py
 
 The monitor supports JSON command send for advanced/manual control.
 
+## Regenerate manual screenshots
+The monitor manual screenshots are generated from app widgets/dialogs (not desktop capture).
+
+From repository root:
+```bash
+python monitor/tools/capture_manual_screens.py
+```
+
+Windows (using project venv) from repository root:
+```powershell
+\.venv\Scripts\python.exe .\monitor\tools\capture_manual_screens.py
+```
+
+This updates images in `docs/screenshots/` used by `docs/MONITOR_USER_MANUAL.md`.
+
 ## Persistence behavior
 When a PLL/program command is applied:
 - Registers are staged
