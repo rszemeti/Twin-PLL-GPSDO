@@ -2,8 +2,6 @@ import sys
 import json
 import threading
 import time
-import os
-import importlib
 from queue import Queue, Empty
 
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
@@ -16,11 +14,7 @@ import serial
 import serial.tools.list_ports
 
 from adf4351_registers import ADF4351RegisterCalculator, ADF4351Config
-
-try:
-    GUI_VERSION = getattr(importlib.import_module('monitor_version'), 'VERSION')
-except Exception:
-    GUI_VERSION = os.environ.get('GPSDO_MONITOR_VERSION', 'dev')
+from monitor_version import VERSION as GUI_VERSION
 
 
 class PLLConfigDialog(QDialog):
