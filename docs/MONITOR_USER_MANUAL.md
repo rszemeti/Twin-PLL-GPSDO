@@ -41,6 +41,8 @@ The application has four main tabs:
 - **Advanced**
 - **About**
 
+![Main tab](screenshots/01-main-live.png)
+
 Screenshot source:
 - **PLL1** with **Set O/P 1** and **Registers**
 - **PLL2** with **Set O/P 2** and **Registers**
