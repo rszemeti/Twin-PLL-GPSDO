@@ -37,6 +37,8 @@ jobs:
 
       - name: Build firmware
         working-directory: firmware
+        env:
+          PLATFORMIO_BUILD_FLAGS: -D FW_VERSION_STRING=\"${{ env.RELEASE_TAG }}\"
         run: python -m platformio run
 
       - name: Stage UF2 artifact
@@ -72,6 +74,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r monitor/requirements.txt
           python -m pip install pyinstaller
+
+      - name: Inject monitor build version
+        shell: pwsh
+        run: |
+          Set-Content -Path "monitor/monitor_version.py" -Value "VERSION = '$env:RELEASE_TAG'"
 
       - name: Build one-file EXE
         run: |

@@ -2,6 +2,8 @@ import sys
 import json
 import threading
 import time
+import os
+import importlib
 from queue import Queue, Empty
 
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
@@ -14,6 +16,11 @@ import serial
 import serial.tools.list_ports
 
 from adf4351_registers import ADF4351RegisterCalculator, ADF4351Config
+
+try:
+    GUI_VERSION = getattr(importlib.import_module('monitor_version'), 'VERSION')
+except Exception:
+    GUI_VERSION = os.environ.get('GPSDO_MONITOR_VERSION', 'dev')
 
 
 class PLLConfigDialog(QDialog):
@@ -342,9 +349,13 @@ class MainWindow(QWidget):
         project_repo.setStyleSheet('font-size: 13px;')
         project_repo.setOpenExternalLinks(True)
         project_repo.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.about_fw_label = QLabel(GUI_VERSION)
+        self.about_fw_label.setStyleSheet('font-size: 13px; color: #e6e8eb;')
         about_project_layout.addWidget(project_title)
         about_project_layout.addWidget(project_info)
         about_project_layout.addWidget(project_repo)
+        about_project_layout.addWidget(QLabel('GUI Version:'))
+        about_project_layout.addWidget(self.about_fw_label)
 
         about_author_box = QGroupBox('Author')
         about_author_layout = QVBoxLayout(about_author_box)

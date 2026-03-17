@@ -14,7 +14,10 @@
 #include "pico/multicore.h"
 
 // Firmware version
-static const char* FW_VERSION = "0.1.0";
+#ifndef FW_VERSION_STRING
+#define FW_VERSION_STRING "dev"
+#endif
+static const char* FW_VERSION = FW_VERSION_STRING;
 
 // Helper: emit a compact JSON response to Serial with an optional newline
 static void sendJsonMessage(const char* status, const char* msg = nullptr) {
