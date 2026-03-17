@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 // ============================================================
 // GPSDO + Dual ADF4351 Reference Source
 // Hardware Configuration
@@ -106,6 +108,10 @@ static const uint32_t ADF2_REGS[6] = {
 // PI loop time constants (in 1PPS ticks = seconds)
 #define DISC_P_GAIN         0.001f   // proportional gain
 #define DISC_I_GAIN         0.0001f  // integral gain
+#define DISC_P_GAIN_MIN     0.000001f
+#define DISC_P_GAIN_MAX     0.05f
+#define DISC_I_GAIN_MIN     0.0000001f
+#define DISC_I_GAIN_MAX     0.01f
 
 // DAC limits (12-bit MCP4725, 0-4095)
 // Set to keep OCXO EFC within safe range
@@ -126,6 +132,8 @@ static const uint32_t ADF2_REGS[6] = {
 #define FREQ_GATE_SECS      1
 // Number of PPS samples to average before applying PI correction.
 #define DISC_AVERAGE_SECS   8
+#define DISC_AVERAGE_SECS_MIN 1
+#define DISC_AVERAGE_SECS_MAX 120
 
 // ============================================================
 // Status / Alarm
@@ -146,6 +154,19 @@ static const uint32_t ADF2_REGS[6] = {
 #define DAC_SAVE_INTERVAL_SECS  300
 // Minimum DAC change (in DAC counts) required to trigger saving
 #define DAC_SAVE_HYSTERESIS     4
+
+// ============================================================
+// Discipliner runtime control persistence
+// ============================================================
+// EEPROM layout:
+//   uint32_t magic
+//   uint32_t version
+//   uint32_t avg_window_s
+//   float    p_gain
+//   float    i_gain
+#define DISC_CTRL_EEPROM_ADDR  512
+#define DISC_CTRL_MAGIC        0xD15CC710UL
+#define DISC_CTRL_VERSION      1
 
 // ============================================================
 // ADF4351 register persistence

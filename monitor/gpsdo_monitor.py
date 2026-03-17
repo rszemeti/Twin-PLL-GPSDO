@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
                                QComboBox, QVBoxLayout, QHBoxLayout, QTextEdit,
                                QLineEdit, QGridLayout, QGroupBox, QDialog,
                                QDialogButtonBox, QFormLayout, QDoubleSpinBox,
-                               QSpinBox, QCheckBox, QMessageBox, QTabWidget)
+                               QSpinBox, QCheckBox, QMessageBox, QTabWidget,
+                               QFileDialog)
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
 import serial
 import serial.tools.list_ports
@@ -170,6 +171,139 @@ class RawRegistersDialog(QDialog):
         return list(reversed(regs_r5_to_r0))
 
 
+class StepResponseDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Step Response Tool')
+        self.setModal(False)
+        self.resize(700, 520)
+        self.samples = []
+
+        form = QFormLayout()
+
+        self.baseline_dac = QSpinBox()
+        self.baseline_dac.setRange(0, 4095)
+        self.baseline_dac.setValue(2048)
+
+        self.step_dac = QSpinBox()
+        self.step_dac.setRange(0, 4095)
+        self.step_dac.setValue(2200)
+
+        self.pre_seconds = QSpinBox()
+        self.pre_seconds.setRange(1, 120)
+        self.pre_seconds.setValue(5)
+        self.pre_seconds.setSuffix(' s')
+
+        self.capture_seconds = QSpinBox()
+        self.capture_seconds.setRange(5, 600)
+        self.capture_seconds.setValue(60)
+        self.capture_seconds.setSuffix(' s')
+
+        self.open_loop = QCheckBox('Use near-open-loop gains during test')
+        self.open_loop.setChecked(True)
+
+        form.addRow('Baseline DAC', self.baseline_dac)
+        form.addRow('Step DAC', self.step_dac)
+        form.addRow('Pre-step duration', self.pre_seconds)
+        form.addRow('Capture duration', self.capture_seconds)
+        form.addRow('', self.open_loop)
+
+        self.status_label = QLabel('Idle')
+        self.status_label.setStyleSheet('color: #aeb7c2;')
+
+        self.sample_view = QTextEdit()
+        self.sample_view.setReadOnly(True)
+
+        self.start_btn = QPushButton('Start Test')
+        self.stop_btn = QPushButton('Stop')
+        self.save_btn = QPushButton('Save CSV')
+        self.close_btn = QPushButton('Close')
+
+        self.stop_btn.setEnabled(False)
+
+        self.start_btn.clicked.connect(self._on_start)
+        self.stop_btn.clicked.connect(self._on_stop)
+        self.save_btn.clicked.connect(self._on_save)
+        self.close_btn.clicked.connect(self.close)
+
+        btns = QHBoxLayout()
+        btns.addWidget(self.start_btn)
+        btns.addWidget(self.stop_btn)
+        btns.addStretch(1)
+        btns.addWidget(self.save_btn)
+        btns.addWidget(self.close_btn)
+
+        layout = QVBoxLayout()
+        layout.addLayout(form)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.sample_view)
+        layout.addLayout(btns)
+        self.setLayout(layout)
+
+    def config(self):
+        return {
+            'baseline_dac': int(self.baseline_dac.value()),
+            'step_dac': int(self.step_dac.value()),
+            'pre_seconds': int(self.pre_seconds.value()),
+            'capture_seconds': int(self.capture_seconds.value()),
+            'open_loop': bool(self.open_loop.isChecked()),
+        }
+
+    def set_running(self, running):
+        self.start_btn.setEnabled(not running)
+        self.stop_btn.setEnabled(running)
+
+    def set_status(self, text):
+        self.status_label.setText(text)
+
+    def reset_samples(self):
+        self.samples = []
+        self.sample_view.clear()
+        self.sample_view.append('t_s,phase_error_ns,dac_value,disc_state')
+
+    def add_sample(self, t_s, phase_error_ns, dac_value, disc_state):
+        row = {
+            't_s': t_s,
+            'phase_error_ns': phase_error_ns,
+            'dac_value': dac_value,
+            'disc_state': disc_state,
+        }
+        self.samples.append(row)
+        phase_txt = '' if phase_error_ns is None else str(phase_error_ns)
+        dac_txt = '' if dac_value is None else str(dac_value)
+        state_txt = '' if disc_state is None else str(disc_state)
+        self.sample_view.append(f'{t_s:.3f},{phase_txt},{dac_txt},{state_txt}')
+
+    def _on_start(self):
+        parent = self.parent()
+        if parent:
+            parent.start_step_response_test(self.config())
+
+    def _on_stop(self):
+        parent = self.parent()
+        if parent:
+            parent.stop_step_response_test(user_requested=True)
+
+    def _on_save(self):
+        if not self.samples:
+            QMessageBox.information(self, 'No data', 'No samples captured yet.')
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Save Step Response CSV', 'step_response.csv', 'CSV Files (*.csv)')
+        if not path:
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('t_s,phase_error_ns,dac_value,disc_state\n')
+                for row in self.samples:
+                    phase_txt = '' if row['phase_error_ns'] is None else str(row['phase_error_ns'])
+                    dac_txt = '' if row['dac_value'] is None else str(row['dac_value'])
+                    state_txt = '' if row['disc_state'] is None else str(row['disc_state'])
+                    f.write(f"{row['t_s']:.6f},{phase_txt},{dac_txt},{state_txt}\n")
+            QMessageBox.information(self, 'Saved', f'Step response saved to:\n{path}')
+        except Exception as e:
+            QMessageBox.warning(self, 'Save failed', f'Failed to save CSV:\n{e}')
+
+
 class SerialReader(threading.Thread):
     def __init__(self, ser, out_q, stop_event):
         super().__init__(daemon=True)
@@ -201,6 +335,12 @@ class Signals(QObject):
 
 
 class MainWindow(QWidget):
+    DISC_PRESETS = {
+        'slow': {'avg_window_s': 20, 'p_gain': 0.0005, 'i_gain': 0.00003},
+        'normal': {'avg_window_s': 8, 'p_gain': 0.0010, 'i_gain': 0.00010},
+        'fast': {'avg_window_s': 4, 'p_gain': 0.0025, 'i_gain': 0.00020},
+    }
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('GPSDO Monitor')
@@ -218,6 +358,31 @@ class MainWindow(QWidget):
         self.latest_regs = {'adf1': None, 'adf2': None}
         self.decode_ref_hz = 10_000_000.0
         self.last_device_updated_popup_ts = 0.0
+        self.last_disc_updated_popup_ts = 0.0
+        self.status_interval_ms = 5000
+        self.step_dialog = None
+        self.step_test_active = False
+        self.step_test_restore = None
+        self.step_test_started_at = 0.0
+        self.step_test_step_sent = False
+        self.suppress_disc_popup = False
+
+        self.step_pre_timer = QTimer(self)
+        self.step_pre_timer.setSingleShot(True)
+        self.step_pre_timer.timeout.connect(self._step_send_step)
+
+        self.step_stop_timer = QTimer(self)
+        self.step_stop_timer.setSingleShot(True)
+        self.step_stop_timer.timeout.connect(self._step_finish_automatic)
+
+        self.step_popup_resume_timer = QTimer(self)
+        self.step_popup_resume_timer.setSingleShot(True)
+        self.step_popup_resume_timer.timeout.connect(self._resume_disc_popups)
+        self.disc_ctrl_last = {
+            'avg_window_s': None,
+            'p_gain': None,
+            'i_gain': None,
+        }
         self.status_state = {
             'gps_fix': False,
             'gps_pps': False,
@@ -280,6 +445,8 @@ class MainWindow(QWidget):
         self.adf2_locked = QLabel('')
         self.adf1_freq = QLabel('')
         self.adf2_freq = QLabel('')
+        self.disc_p_gain = QLabel('')
+        self.disc_i_gain = QLabel('')
 
         grid.addWidget(QLabel('Firmware'), 0, 0); grid.addWidget(self.fw_label, 0, 1)
         grid.addWidget(QLabel('Board'), 1, 0); grid.addWidget(self.board_label, 1, 1)
@@ -299,8 +466,69 @@ class MainWindow(QWidget):
         grid.addWidget(QLabel('adf2_locked'), 14, 0); grid.addWidget(self.adf2_locked, 14, 1)
         grid.addWidget(QLabel('adf1 decoded'), 15, 0); grid.addWidget(self.adf1_freq, 15, 1)
         grid.addWidget(QLabel('adf2 decoded'), 16, 0); grid.addWidget(self.adf2_freq, 16, 1)
+        grid.addWidget(QLabel('Disc P gain'), 17, 0); grid.addWidget(self.disc_p_gain, 17, 1)
+        grid.addWidget(QLabel('Disc I gain'), 18, 0); grid.addWidget(self.disc_i_gain, 18, 1)
 
         status_box.setLayout(grid)
+
+        disc_ctrl_box = QGroupBox('Discipliner Control (Advanced)')
+        disc_ctrl_form = QFormLayout()
+
+        self.disc_avg_input = QSpinBox()
+        self.disc_avg_input.setRange(1, 120)
+        self.disc_avg_input.setValue(8)
+        self.disc_avg_input.setSuffix(' s')
+
+        self.disc_p_input = QDoubleSpinBox()
+        self.disc_p_input.setDecimals(6)
+        self.disc_p_input.setRange(0.000001, 0.05)
+        self.disc_p_input.setSingleStep(0.0001)
+        self.disc_p_input.setValue(0.001)
+
+        self.disc_i_input = QDoubleSpinBox()
+        self.disc_i_input.setDecimals(7)
+        self.disc_i_input.setRange(0.0000001, 0.01)
+        self.disc_i_input.setSingleStep(0.00001)
+        self.disc_i_input.setValue(0.0001)
+
+        disc_ctrl_form.addRow('Average window', self.disc_avg_input)
+        disc_ctrl_form.addRow('P gain', self.disc_p_input)
+        disc_ctrl_form.addRow('I gain', self.disc_i_input)
+
+        disc_ctrl_btns = QHBoxLayout()
+        self.disc_refresh_btn = QPushButton('Refresh')
+        self.disc_refresh_btn.clicked.connect(self.request_disc_ctrl)
+        self.disc_apply_btn = QPushButton('Apply')
+        self.disc_apply_btn.clicked.connect(self.apply_disc_ctrl)
+        disc_ctrl_btns.addWidget(self.disc_refresh_btn)
+        disc_ctrl_btns.addWidget(self.disc_apply_btn)
+
+        disc_preset_btns = QHBoxLayout()
+        self.disc_preset_cons_btn = QPushButton('Slow')
+        self.disc_preset_cons_btn.clicked.connect(lambda: self.apply_disc_preset('slow'))
+        self.disc_preset_norm_btn = QPushButton('Normal')
+        self.disc_preset_norm_btn.clicked.connect(lambda: self.apply_disc_preset('normal'))
+        self.disc_preset_fast_btn = QPushButton('Fast')
+        self.disc_preset_fast_btn.clicked.connect(lambda: self.apply_disc_preset('fast'))
+
+        self.step_response_btn = QPushButton('Step Response...')
+        self.step_response_btn.clicked.connect(self.open_step_response_dialog)
+        disc_preset_btns.addWidget(self.disc_preset_cons_btn)
+        disc_preset_btns.addWidget(self.disc_preset_norm_btn)
+        disc_preset_btns.addWidget(self.disc_preset_fast_btn)
+
+        disc_ctrl_layout = QVBoxLayout(disc_ctrl_box)
+        disc_ctrl_layout.addLayout(disc_ctrl_form)
+        disc_ctrl_layout.addLayout(disc_ctrl_btns)
+        presets_label = QLabel('Presets')
+        presets_label.setStyleSheet('color: #aeb7c2; font-weight: 600;')
+        disc_ctrl_layout.addWidget(presets_label)
+        disc_ctrl_layout.addLayout(disc_preset_btns)
+        disc_ctrl_layout.addWidget(self.step_response_btn)
+
+        disc_ctrl_row = QHBoxLayout()
+        disc_ctrl_row.addWidget(disc_ctrl_box, 1)
+        disc_ctrl_row.addStretch(1)
 
         # Virtual front-panel LEDs
         leds_box = QGroupBox('Virtual LEDs')
@@ -386,18 +614,17 @@ class MainWindow(QWidget):
         # Main tab (visual front panel)
         main_tab = QWidget()
         main_layout = QVBoxLayout(main_tab)
-        main_layout.addLayout(pll_row)
-        main_layout.addWidget(front_status_box)
         main_layout.addWidget(leds_box)
+        main_layout.addWidget(front_status_box)
+        main_layout.addLayout(pll_row)
         main_layout.addStretch(1)
 
-        # Details tab (logs and internals)
+        # Details tab (status/log visibility)
         details_tab = QWidget()
         details_layout = QHBoxLayout(details_tab)
 
         details_left = QVBoxLayout()
         details_left.addWidget(status_box)
-        details_left.addLayout(send_layout)
         details_left.addStretch(1)
 
         details_right = QVBoxLayout()
@@ -407,6 +634,13 @@ class MainWindow(QWidget):
 
         details_layout.addLayout(details_left, 1)
         details_layout.addLayout(details_right, 1)
+
+        # Advanced tab (controls and tooling)
+        advanced_tab = QWidget()
+        advanced_layout = QVBoxLayout(advanced_tab)
+        advanced_layout.addLayout(disc_ctrl_row)
+        advanced_layout.addLayout(send_layout)
+        advanced_layout.addStretch(1)
 
         # About tab
         about_tab = QWidget()
@@ -458,6 +692,7 @@ class MainWindow(QWidget):
         tabs = QTabWidget()
         tabs.addTab(main_tab, 'Main')
         tabs.addTab(details_tab, 'Details')
+        tabs.addTab(advanced_tab, 'Advanced')
         tabs.addTab(about_tab, 'About')
 
         root = QVBoxLayout()
@@ -612,6 +847,8 @@ class MainWindow(QWidget):
         self.log_text.append(f'Connected to {port} @ {baud}')
         self._request_info()
         self._request_adf_regs()
+        self.request_disc_ctrl()
+        self.request_status_ctrl()
 
     def _serial_write_line(self, line, log_tx=True):
         if not self.serial or not self.serial.is_open:
@@ -642,6 +879,188 @@ class MainWindow(QWidget):
             self.serial = None
         self.connect_btn.setText('Connect')
         self.log_text.append('Disconnected')
+
+    def request_status_ctrl(self):
+        if not self.serial or not self.serial.is_open:
+            return
+        self._serial_write_line(json.dumps({'cmd': 'status_ctrl', 'action': 'get'}))
+
+    def open_step_response_dialog(self):
+        if self.step_dialog is None:
+            self.step_dialog = StepResponseDialog(parent=self)
+        self.step_dialog.show()
+        self.step_dialog.raise_()
+        self.step_dialog.activateWindow()
+
+    def start_step_response_test(self, cfg):
+        if self.step_test_active:
+            self.log_text.append('Step test already running')
+            return
+        if not self.serial or not self.serial.is_open:
+            QMessageBox.warning(self, 'Not connected', 'Connect to the device before running a step response test.')
+            return
+        if self.disc_ctrl_last['avg_window_s'] is None or self.disc_ctrl_last['p_gain'] is None or self.disc_ctrl_last['i_gain'] is None:
+            self.request_disc_ctrl()
+            QMessageBox.information(self, 'Please retry', 'Fetching current discipliner values. Click Start Test again in a moment.')
+            return
+
+        current_dac = None
+        try:
+            current_dac = int(float(self.dac_value.text()))
+        except Exception:
+            current_dac = cfg['baseline_dac']
+
+        self.step_test_restore = {
+            'dac_value': current_dac,
+            'avg_window_s': int(self.disc_ctrl_last['avg_window_s']),
+            'p_gain': float(self.disc_ctrl_last['p_gain']),
+            'i_gain': float(self.disc_ctrl_last['i_gain']),
+            'status_interval_ms': int(self.status_interval_ms),
+            'open_loop': bool(cfg.get('open_loop', False)),
+        }
+
+        if self.step_dialog:
+            self.step_dialog.reset_samples()
+            self.step_dialog.set_running(True)
+            self.step_dialog.set_status('Starting step response test...')
+
+        self.step_test_active = True
+        self.step_test_step_sent = False
+        self.step_test_started_at = time.monotonic()
+        self.suppress_disc_popup = True
+        self.step_popup_resume_timer.stop()
+
+        if cfg.get('open_loop', False):
+            self._serial_write_line(json.dumps({
+                'cmd': 'disc_ctrl',
+                'action': 'set',
+                'avg_window_s': int(self.disc_ctrl_last['avg_window_s']),
+                'p_gain': 0.000001,
+                'i_gain': 0.0000001,
+                'persist': False,
+            }))
+
+        self._serial_write_line(json.dumps({'cmd': 'status_ctrl', 'action': 'set', 'status_interval_ms': 1000}))
+        self._serial_write_line(json.dumps({'cmd': 'dac', 'value': int(cfg['baseline_dac'])}))
+
+        pre_ms = int(cfg['pre_seconds']) * 1000
+        total_ms = int(cfg['pre_seconds'] + cfg['capture_seconds']) * 1000
+        self.step_pre_timer.start(pre_ms)
+        self.step_stop_timer.start(total_ms)
+
+    def _step_send_step(self):
+        if not self.step_test_active or self.step_dialog is None:
+            return
+        cfg = self.step_dialog.config()
+        self.step_test_step_sent = True
+        self._serial_write_line(json.dumps({'cmd': 'dac', 'value': int(cfg['step_dac'])}))
+        self.step_dialog.set_status('Step applied, capturing response...')
+
+    def _step_finish_automatic(self):
+        self.stop_step_response_test(user_requested=False)
+
+    def stop_step_response_test(self, user_requested=False):
+        if not self.step_test_active:
+            return
+        self.step_pre_timer.stop()
+        self.step_stop_timer.stop()
+        self.step_test_active = False
+
+        restore = self.step_test_restore or {}
+        if restore:
+            self._serial_write_line(json.dumps({'cmd': 'status_ctrl', 'action': 'set', 'status_interval_ms': int(restore.get('status_interval_ms', 5000))}))
+            self._serial_write_line(json.dumps({'cmd': 'dac', 'value': int(restore.get('dac_value', 2048))}))
+            self._serial_write_line(json.dumps({
+                'cmd': 'disc_ctrl',
+                'action': 'set',
+                'avg_window_s': int(restore.get('avg_window_s', 8)),
+                'p_gain': float(restore.get('p_gain', 0.0010)),
+                'i_gain': float(restore.get('i_gain', 0.0001)),
+                'persist': False,
+            }))
+
+        if self.step_dialog:
+            self.step_dialog.set_running(False)
+            if user_requested:
+                self.step_dialog.set_status('Step test stopped by user. Settings restored.')
+            else:
+                self.step_dialog.set_status('Step test complete. Settings restored.')
+
+        self.step_test_restore = None
+        self.step_popup_resume_timer.start(1500)
+
+    def _resume_disc_popups(self):
+        self.suppress_disc_popup = False
+
+    def request_disc_ctrl(self):
+        if not self.serial or not self.serial.is_open:
+            return
+        self._serial_write_line(json.dumps({'cmd': 'disc_ctrl', 'action': 'get'}))
+
+    def apply_disc_ctrl(self):
+        if not self.serial or not self.serial.is_open:
+            self.log_text.append('Not connected')
+            return
+        payload = {
+            'cmd': 'disc_ctrl',
+            'action': 'set',
+            'avg_window_s': int(self.disc_avg_input.value()),
+            'p_gain': float(self.disc_p_input.value()),
+            'i_gain': float(self.disc_i_input.value()),
+        }
+        self._serial_write_line(json.dumps(payload))
+
+    def apply_disc_preset(self, preset_name):
+        preset = self.DISC_PRESETS.get(preset_name)
+        if not preset:
+            self.log_text.append(f'Unknown preset: {preset_name}')
+            return
+
+        self.disc_avg_input.setValue(int(preset['avg_window_s']))
+        self.disc_p_input.setValue(float(preset['p_gain']))
+        self.disc_i_input.setValue(float(preset['i_gain']))
+        self.log_text.append(
+            f"Applying preset '{preset_name}': avg={preset['avg_window_s']}s, "
+            f"P={preset['p_gain']:.6f}, I={preset['i_gain']:.7f}"
+        )
+        self.apply_disc_ctrl()
+
+    def _apply_disc_ctrl_values(self, obj):
+        avg = obj.get('avg_window_s')
+        p_gain = obj.get('p_gain')
+        i_gain = obj.get('i_gain')
+
+        if avg is not None:
+            avg_i = int(avg)
+            self.disc_ctrl_last['avg_window_s'] = avg_i
+            self.disc_avg_window.setText(str(avg_i))
+            if not self.disc_avg_input.hasFocus():
+                self.disc_avg_input.setValue(avg_i)
+
+        if p_gain is not None:
+            p_f = float(p_gain)
+            self.disc_ctrl_last['p_gain'] = p_f
+            self.disc_p_gain.setText(f'{p_f:.6f}')
+            if not self.disc_p_input.hasFocus():
+                self.disc_p_input.setValue(p_f)
+
+        if i_gain is not None:
+            i_f = float(i_gain)
+            self.disc_ctrl_last['i_gain'] = i_f
+            self.disc_i_gain.setText(f'{i_f:.7f}')
+            if not self.disc_i_input.hasFocus():
+                self.disc_i_input.setValue(i_f)
+
+    def _handle_step_sample(self, obj):
+        if not self.step_test_active or self.step_dialog is None:
+            return
+        if ('phase_error_ns' not in obj and 'dac_value' not in obj and 'disc_state' not in obj):
+            return
+        t_s = time.monotonic() - self.step_test_started_at
+        phase = obj.get('phase_error_ns')
+        dac = obj.get('dac_value')
+        state = obj.get('disc_state')
+        self.step_dialog.add_sample(t_s, phase, dac, state)
 
     def _poll_serial_queue(self):
         for _ in range(self.max_serial_items_per_tick):
@@ -686,6 +1105,28 @@ class MainWindow(QWidget):
             if obj.get('cmd') == 'info':
                 self.fw_label.setText(obj.get('version', ''))
                 self.board_label.setText(obj.get('board', ''))
+                self._apply_disc_ctrl_values(obj)
+                if 'status_interval_ms' in obj:
+                    self.status_interval_ms = int(obj.get('status_interval_ms'))
+                self.log_text.append(json.dumps(obj))
+                return
+            if obj.get('cmd') == 'disc_ctrl':
+                self._apply_disc_ctrl_values(obj)
+                if obj.get('action') == 'set':
+                    persist_requested = self._to_bool(obj.get('persist_requested', True))
+                    if (not self.suppress_disc_popup) and persist_requested:
+                            now_ts = time.monotonic()
+                            if (now_ts - self.last_disc_updated_popup_ts) >= 1.0:
+                                self.last_disc_updated_popup_ts = now_ts
+                                if self._to_bool(obj.get('persisted', False)):
+                                    QMessageBox.information(self, 'Device Updated', 'Loop settings were written to EEPROM successfully.')
+                                else:
+                                    QMessageBox.warning(self, 'Persistence Warning', 'Loop settings applied, but EEPROM save failed.')
+                self.log_text.append(json.dumps(obj))
+                return
+            if obj.get('cmd') == 'status_ctrl':
+                if 'status_interval_ms' in obj:
+                    self.status_interval_ms = int(obj.get('status_interval_ms'))
                 self.log_text.append(json.dumps(obj))
                 return
             if obj.get('event') == 'saved_adf_regs':
@@ -752,6 +1193,16 @@ class MainWindow(QWidget):
                 self.disc_avg_window.setText(str(obj.get('disc_avg_window_s')))
             if 'disc_avg_phase_ns' in obj:
                 self.disc_avg_phase.setText(str(obj.get('disc_avg_phase_ns')))
+            if 'disc_p_gain' in obj:
+                p_gain = float(obj.get('disc_p_gain'))
+                self.disc_p_gain.setText(f'{p_gain:.6f}')
+            if 'disc_i_gain' in obj:
+                i_gain = float(obj.get('disc_i_gain'))
+                self.disc_i_gain.setText(f'{i_gain:.7f}')
+            if 'status_interval_ms' in obj:
+                self.status_interval_ms = int(obj.get('status_interval_ms'))
+
+            self._handle_step_sample(obj)
             if 'dac_value' in obj:
                 self.dac_value.setText(str(obj.get('dac_value')))
             if 'adf1_locked' in obj:

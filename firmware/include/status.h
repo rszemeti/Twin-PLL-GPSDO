@@ -11,11 +11,14 @@ public:
     void begin();
     void update();          // call every ~500ms from core0
     void printDebug();      // verbose serial output
+    void setDiscAvgWindowSecs(uint32_t secs) { _discAvgWindowSecs = secs; }
     // Allow external code to assert/clear the alarm LED
     // Steady alarm indicates hardware failure; flashing alarm indicates
     // out-of-lock/health condition.
     void setAlarmSteady(bool on);
     void setAlarmFlash(bool on);
+    void setStatusIntervalMs(uint32_t intervalMs) { _statusIntervalMs = intervalMs; }
+    uint32_t statusIntervalMs() const { return _statusIntervalMs; }
 
 private:
     Discipliner& _disc;
@@ -37,6 +40,8 @@ private:
     bool     _adf1BlinkOn;
     bool     _adf2BlinkOn;
     uint32_t _lastAdfBlinkMs;
+    uint32_t _discAvgWindowSecs;
+    uint32_t _statusIntervalMs;
 
     void setLED(uint8_t pin, bool on);
     // (implementation in source)

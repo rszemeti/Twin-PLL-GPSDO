@@ -35,41 +35,47 @@ After connecting, the monitor automatically requests device info and ADF registe
 
 ## 3. UI overview
 
-The application has three main tabs:
+The application has four main tabs:
 - **Main**
 - **Details**
+- **Advanced**
 - **About**
 
 Screenshot source:
-- The screenshots in this manual are generated directly from monitor Qt widgets/dialogs using `monitor/tools/capture_manual_screens.py`.
-- They are application captures (not full-desktop screenshots).
-
-## 4. Main tab
-
-The Main tab is the front-panel style control/status view.
-
-![Main tab](screenshots/01-main-live.png)
-
-### 4.1 PLL cards
-Each card shows one synthesizer:
 - **PLL1** with **Set O/P 1** and **Registers**
 - **PLL2** with **Set O/P 2** and **Registers**
 
 The frequency text in each card is decoded from live register readback.
 
 ### 4.2 Front Status
-- **Sats Used** shows active satellites used by the GPS solution.
-
-### 4.3 Virtual LEDs
-The LED panel mirrors runtime state:
 - GPS Fix
 - GPS Lock
 - Disciplined
 - ADF1 Lock
 - ADF2 Lock
-- Alarm
 
-Color behavior:
+### 7.5 Discipliner Control
+The Advanced tab includes runtime loop controls:
+- **Average window (s)**
+- **P gain**
+- **I gain**
+
+Use **Refresh** to read current firmware values, and **Apply** to send updates without rebooting.
+Preset buttons (**Slow**, **Normal**, **Fast**) provide one-click tuning profiles and apply immediately.
+Applied values are saved in firmware persistent storage and restored on reboot.
+
+### 7.6 Step Response Tool
+Use **Step Response...** in **Discipliner Control (Advanced tab)** to open the step test dialog.
+
+The tool can:
+- apply a timed DAC step (baseline then step),
+- optionally use near-open-loop gains for the test,
+- temporarily set status telemetry to 1 Hz,
+- capture response samples,
+- export captured data to CSV.
+
+Step-test temporary loop changes are applied in non-persistent mode, so they are not written to EEPROM.
+
 - green/red used for good/bad lock-type status,
 - alarm flashes if firmware reports flash alarm condition.
 
@@ -158,8 +164,10 @@ Shows:
 - command TX lines,
 - non-periodic operational events.
 
-### 7.4 Send JSON box
+### 7.4 Send JSON box (Advanced tab)
 Manual command entry for advanced operation.
+
+![Advanced tab](screenshots/06-advanced-live.png)
 
 Example:
 - `{\"cmd\":\"dac\",\"value\":2048}`

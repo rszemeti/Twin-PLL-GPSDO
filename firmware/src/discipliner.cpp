@@ -1,6 +1,7 @@
 #include "discipliner.h"
 #include "config.h"
 #include <EEPROM.h>
+#include <math.h>
 
 Discipliner::Discipliner(MCP4725 &dac)
     : _dac(dac),
@@ -9,6 +10,8 @@ Discipliner::Discipliner(MCP4725 &dac)
       _integral(DAC_CENTRE),
       _lastError(0),
       _freqOffset_ppb(0.0f),
+    _pGain(DISC_P_GAIN),
+    _iGain(DISC_I_GAIN),
       _warmupCount(0),
       _lockSecs(0),
       _holdoverSecs(0),
@@ -82,8 +85,8 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
     // Positive error = OCXO fast → reduce EFC voltage → reduce DAC
     _lastError = phaseError_ns;
 
-    float p = DISC_P_GAIN * (float)phaseError_ns;
-    _integral += DISC_I_GAIN * (float)phaseError_ns;
+    float p = _pGain * (float)phaseError_ns;
+    _integral += _iGain * (float)phaseError_ns;
 
     // Clamp integral
     if (_integral > DAC_MAX) _integral = DAC_MAX;
@@ -135,4 +138,19 @@ void Discipliner::applyDAC(uint16_t val) {
 
 void Discipliner::setDACValue(uint16_t val) {
     applyDAC(val);
+}
+
+bool Discipliner::setLoopGains(float pGain, float iGain) {
+    if (!isfinite(pGain) || !isfinite(iGain)) {
+        return false;
+    }
+    if (pGain < DISC_P_GAIN_MIN || pGain > DISC_P_GAIN_MAX) {
+        return false;
+    }
+    if (iGain < DISC_I_GAIN_MIN || iGain > DISC_I_GAIN_MAX) {
+        return false;
+    }
+    _pGain = pGain;
+    _iGain = iGain;
+    return true;
 }

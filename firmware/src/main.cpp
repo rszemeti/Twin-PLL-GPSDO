@@ -60,6 +60,19 @@ static uint32_t adfEepromCommitDueMs = 0;
 static bool adfFsReady = false;
 static bool adf1PersistDirty = false;
 static bool adf2PersistDirty = false;
+static uint32_t g_discAverageSecs = DISC_AVERAGE_SECS;
+
+// Forward declarations for global instances (defined later in this file)
+extern Discipliner disc;
+extern StatusManager status;
+
+struct DiscCtrlBlob {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t avgWindowSecs;
+    float pGain;
+    float iGain;
+};
 
 struct ADFRegsBlob {
     uint32_t magic;
@@ -142,6 +155,76 @@ static bool commitStagedADFRegsToEEPROM() {
         adf2PersistDirty = false;
     }
     return committed;
+}
+
+static bool commitEEPROMNow() {
+    bool committed = false;
+#if ADF_EEPROM_USE_LOCKOUT
+    multicore_lockout_start_blocking();
+    committed = EEPROM.commit();
+    multicore_lockout_end_blocking();
+#else
+    pio_set_irq0_source_enabled(pio0, pis_interrupt0, false);
+    pio_set_irq1_source_enabled(pio0, pis_interrupt1, false);
+    committed = EEPROM.commit();
+    pio_set_irq0_source_enabled(pio0, pis_interrupt0, true);
+    pio_set_irq1_source_enabled(pio0, pis_interrupt1, true);
+#endif
+    return committed;
+}
+
+static bool saveDiscCtrlSettings(bool emitJson = true) {
+    DiscCtrlBlob blob{};
+    blob.magic = DISC_CTRL_MAGIC;
+    blob.version = DISC_CTRL_VERSION;
+    blob.avgWindowSecs = g_discAverageSecs;
+    blob.pGain = disc.pGain();
+    blob.iGain = disc.iGain();
+
+    EEPROM.put(DISC_CTRL_EEPROM_ADDR, blob);
+    bool committed = commitEEPROMNow();
+
+    if (emitJson) {
+        StaticJsonDocument<224> dj;
+        dj["status"] = committed ? "info" : "error";
+        dj["event"] = "saved_disc_ctrl";
+        dj["committed"] = committed;
+        dj["avg_window_s"] = blob.avgWindowSecs;
+        dj["p_gain"] = blob.pGain;
+        dj["i_gain"] = blob.iGain;
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+    return committed;
+}
+
+static bool loadDiscCtrlSettings(bool emitJson = true) {
+    DiscCtrlBlob blob{};
+    EEPROM.get(DISC_CTRL_EEPROM_ADDR, blob);
+
+    bool ok = (blob.magic == DISC_CTRL_MAGIC) && (blob.version == DISC_CTRL_VERSION);
+    ok = ok && (blob.avgWindowSecs >= DISC_AVERAGE_SECS_MIN) && (blob.avgWindowSecs <= DISC_AVERAGE_SECS_MAX);
+    ok = ok && disc.setLoopGains(blob.pGain, blob.iGain);
+
+    if (ok) {
+        g_discAverageSecs = blob.avgWindowSecs;
+    } else {
+        g_discAverageSecs = DISC_AVERAGE_SECS;
+        disc.setLoopGains(DISC_P_GAIN, DISC_I_GAIN);
+    }
+    status.setDiscAvgWindowSecs(g_discAverageSecs);
+
+    if (emitJson) {
+        StaticJsonDocument<224> dj;
+        dj["status"] = ok ? "info" : "warning";
+        dj["event"] = ok ? "loaded_disc_ctrl" : "using_default_disc_ctrl";
+        dj["avg_window_s"] = g_discAverageSecs;
+        dj["p_gain"] = disc.pGain();
+        dj["i_gain"] = disc.iGain();
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+    return ok;
 }
 // Presence/attempt tracking
 enum class PeripheralStatus { PS_UNKNOWN=0, PS_OK=1, PS_ABSENT=2 };
@@ -614,6 +697,119 @@ static void handleCLI(String s) {
             } else {
                 sendJsonMessage("error", "DAC value out of range");
             }
+        } else if (strcmp(cmd, "disc_ctrl") == 0) {
+            const char* action = doc["action"] | "get";
+            if (strcmp(action, "get") == 0) {
+                StaticJsonDocument<256> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "disc_ctrl";
+                dj["action"] = "get";
+                dj["avg_window_s"] = g_discAverageSecs;
+                dj["p_gain"] = disc.pGain();
+                dj["i_gain"] = disc.iGain();
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else if (strcmp(action, "set") == 0) {
+                bool haveAny = false;
+                bool persist = doc["persist"] | true;
+                uint32_t newAvg = g_discAverageSecs;
+                if (doc.containsKey("avg_window_s")) {
+                    haveAny = true;
+                    int avgIn = doc["avg_window_s"].as<int>();
+                    if (avgIn < DISC_AVERAGE_SECS_MIN || avgIn > DISC_AVERAGE_SECS_MAX) {
+                        sendJsonMessage("error", "avg_window_s out of range");
+                        return;
+                    }
+                    newAvg = (uint32_t)avgIn;
+                }
+
+                float newP = disc.pGain();
+                float newI = disc.iGain();
+                if (doc.containsKey("p_gain")) {
+                    haveAny = true;
+                    newP = doc["p_gain"].as<float>();
+                }
+                if (doc.containsKey("i_gain")) {
+                    haveAny = true;
+                    newI = doc["i_gain"].as<float>();
+                }
+                if (!haveAny) {
+                    sendJsonMessage("error", "disc_ctrl set requires avg_window_s and/or p_gain/i_gain");
+                    return;
+                }
+                if (!disc.setLoopGains(newP, newI)) {
+                    sendJsonMessage("error", "p_gain or i_gain out of range");
+                    return;
+                }
+
+                g_discAverageSecs = newAvg;
+                status.setDiscAvgWindowSecs(g_discAverageSecs);
+
+                StaticJsonDocument<256> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "disc_ctrl";
+                dj["action"] = "set";
+                dj["avg_window_s"] = g_discAverageSecs;
+                dj["p_gain"] = disc.pGain();
+                dj["i_gain"] = disc.iGain();
+                dj["persist_requested"] = persist;
+                dj["persisted"] = persist ? saveDiscCtrlSettings(false) : false;
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else if (strcmp(action, "save") == 0) {
+                bool persisted = saveDiscCtrlSettings(false);
+                StaticJsonDocument<256> dj;
+                dj["status"] = persisted ? "ok" : "error";
+                dj["cmd"] = "disc_ctrl";
+                dj["action"] = "save";
+                dj["avg_window_s"] = g_discAverageSecs;
+                dj["p_gain"] = disc.pGain();
+                dj["i_gain"] = disc.iGain();
+                dj["persisted"] = persisted;
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else if (strcmp(action, "load") == 0) {
+                bool loaded = loadDiscCtrlSettings(false);
+                StaticJsonDocument<256> dj;
+                dj["status"] = loaded ? "ok" : "warning";
+                dj["cmd"] = "disc_ctrl";
+                dj["action"] = "load";
+                dj["avg_window_s"] = g_discAverageSecs;
+                dj["p_gain"] = disc.pGain();
+                dj["i_gain"] = disc.iGain();
+                dj["loaded"] = loaded;
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else {
+                sendJsonMessage("error", "disc_ctrl action must be get|set|save|load");
+            }
+        } else if (strcmp(cmd, "status_ctrl") == 0) {
+            const char* action = doc["action"] | "get";
+            if (strcmp(action, "get") == 0) {
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "status_ctrl";
+                dj["action"] = "get";
+                dj["status_interval_ms"] = status.statusIntervalMs();
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else if (strcmp(action, "set") == 0) {
+                int intervalMs = doc["status_interval_ms"] | -1;
+                if (intervalMs < 200 || intervalMs > 10000) {
+                    sendJsonMessage("error", "status_interval_ms out of range (200..10000)");
+                    return;
+                }
+                status.setStatusIntervalMs((uint32_t)intervalMs);
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "status_ctrl";
+                dj["action"] = "set";
+                dj["status_interval_ms"] = status.statusIntervalMs();
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else {
+                sendJsonMessage("error", "status_ctrl action must be get|set");
+            }
         } else if (strcmp(cmd, "adf_persist") == 0) {
             const char* action = doc["action"];
             if (!action) {
@@ -646,7 +842,7 @@ static void handleCLI(String s) {
                 sendJsonMessage("error", "adf_persist action must be status|commit");
             }
         } else if (strcmp(cmd, "help") == 0) {
-            sendJsonMessage("info", "JSON commands: {\"cmd\":\"adf1\",\"action\":\"show\"}, {\"cmd\":\"dac\",\"value\":2048}");
+            sendJsonMessage("info", "JSON commands: adf1/adf2, dac, adf_persist, disc_ctrl get|set|save|load, status_ctrl get|set");
         } else if (strcmp(cmd, "info") == 0) {
             StaticJsonDocument<384> dj;
             dj["status"] = "ok";
@@ -656,6 +852,10 @@ static void handleCLI(String s) {
             dj["have_dac"] = static_cast<int>(haveDAC);
             dj["have_adf1"] = static_cast<int>(haveADF1);
             dj["have_adf2"] = static_cast<int>(haveADF2);
+            dj["disc_avg_window_s"] = g_discAverageSecs;
+            dj["disc_p_gain"] = disc.pGain();
+            dj["disc_i_gain"] = disc.iGain();
+            dj["status_interval_ms"] = status.statusIntervalMs();
             bool want_regs = doc["regs"] | false;
             if (want_regs) {
                 JsonArray a1 = dj.createNestedArray("adf1_regs");
@@ -749,12 +949,15 @@ static void handleCLI(String s) {
         dj["cmd"] = "info";
         dj["version"] = FW_VERSION;
         dj["board"] = "RP2350";
+        dj["disc_avg_window_s"] = g_discAverageSecs;
+        dj["disc_p_gain"] = disc.pGain();
+        dj["disc_i_gain"] = disc.iGain();
         serializeJson(dj, Serial);
         Serial.println();
     } else if (cmd == "help") {
         StaticJsonDocument<256> dj;
         dj["status"] = "info";
-        dj["help"] = "adf1 show|save|load|program|default|set <i> <hex>; adf2 show|save|load|program|default|set <i> <hex>";
+        dj["help"] = "adf1 show|save|load|program|default|set <i> <hex>; adf2 show|save|load|program|default|set <i> <hex>; disc_ctrl get|set|save|load; status_ctrl get|set";
         serializeJson(dj, Serial);
         Serial.println();
     } else {
@@ -863,6 +1066,7 @@ void setup() {
     // EEPROM emulation must be initialized before put/get and committed after writes.
     // Reserve a small region sufficient for DAC + ADF blocks.
     EEPROM.begin(1024);
+    loadDiscCtrlSettings(true);
 
 #if ADF_PERSIST_EEPROM
     adfFsReady = LittleFS.begin();
@@ -997,7 +1201,7 @@ void loop() {
         phaseAccumNs += tr.phaseError_ns;
         phaseAccumCount++;
 
-        if (phaseAccumCount >= DISC_AVERAGE_SECS) {
+        if (phaseAccumCount >= g_discAverageSecs) {
             int32_t averagedPhaseNs = (int32_t)(phaseAccumNs / (int64_t)phaseAccumCount);
             disc.update(averagedPhaseNs, gpsGood);
             phaseAccumNs = 0;

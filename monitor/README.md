@@ -20,7 +20,7 @@ Usage
 
 - Select serial port and press Connect.
 - The monitor displays firmware version, peripheral states, DAC value, ADF lock states, and logs raw/non-JSON lines.
-- Send JSON commands in the send box (e.g. {"cmd":"dac","value":2048}).
+- Send JSON commands from the **Advanced** tab send box (e.g. {"cmd":"dac","value":2048}).
 - Use **Set PLL1 Register** or **Set PLL2 Register** to enter a target frequency and apply generated ADF4351 registers; popups preload from decoded live register values when available (otherwise fallback defaults are 10 MHz ref, R=5).
 - Popup **Synth mode** options:
 	- **Auto**: use Integer-N when exact, otherwise use Fractional-N.
@@ -30,6 +30,10 @@ Usage
 - Popup **Noise mode** lets you choose **Low noise** or **Low spur** register mode.
 - Popup **Charge pump current** lets you choose the ADF4351 CP current code (0.31 mA to 5.00 mA).
 - The firmware now auto-saves ADF registers to EEPROM when `program` is issued, so settings persist across reboot without a separate save step.
+- **Discipliner Control (Advanced)** (Advanced tab) lets you read/apply runtime `avg_window_s`, `P gain`, and `I gain` via firmware JSON command `disc_ctrl`.
+- Preset buttons (**Slow**, **Normal**, **Fast**) provide one-click loop tuning and immediately apply those values.
+- Applied discipliner settings are persisted in firmware and restored after reboot.
+- **Step Response...** in **Discipliner Control (Advanced)** opens a test tool that can run a timed DAC step, temporarily increase telemetry rate to 1 Hz, capture response samples, and export CSV.
 
 ADF4351 register helper
 
