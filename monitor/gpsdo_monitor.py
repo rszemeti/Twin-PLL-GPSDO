@@ -2,6 +2,7 @@ import sys
 import json
 import threading
 import time
+import re
 from queue import Queue, Empty
 
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
@@ -112,6 +113,61 @@ class PLLConfigDialog(QDialog):
             'noise_mode': self.noise_mode.currentData(),
             'charge_pump_code': self.charge_pump.currentData(),
         }
+
+
+class RawRegistersDialog(QDialog):
+    def __init__(self, pll_name='PLL', default_raw_regs=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f'{pll_name} Registers')
+        self.setModal(True)
+        self.resize(420, 300)
+
+        self.raw_regs_text = QTextEdit()
+        self.raw_regs_text.setPlaceholderText(
+            'Enter 6 hex values in order R5..R0, one per line\n'
+            'Example:\n0x00580005\n0x00800004\n0x00000003\n0x00004E42\n0x00008011\n0x002C8050'
+        )
+
+        if default_raw_regs and len(default_raw_regs) == 6:
+            prefill = []
+            for reg_index in range(5, -1, -1):
+                prefill.append(f'R{reg_index}: 0x{int(default_raw_regs[reg_index]) & 0xFFFFFFFF:08X}')
+            self.raw_regs_text.setPlainText('\n'.join(prefill))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.raw_regs_text)
+        layout.addWidget(buttons)
+        self.setLayout(layout)
+
+    def registers_r0_to_r5(self):
+        lines = [line.strip() for line in self.raw_regs_text.toPlainText().splitlines() if line.strip()]
+        if not lines:
+            raise ValueError('Raw register list is empty')
+
+        tokens = []
+        for line in lines:
+            cleaned = re.sub(r'^[Rr]\s*[0-5]\s*[:=]\s*', '', line)
+            parts = [part.strip() for part in cleaned.split(',') if part.strip()]
+            if not parts:
+                continue
+            tokens.extend(parts)
+
+        if len(tokens) != 6:
+            raise ValueError(f'Expected 6 register values (R5..R0), got {len(tokens)}')
+
+        regs_r5_to_r0 = []
+        for idx, token in enumerate(tokens):
+            value_text = token[2:] if token.lower().startswith('0x') else token
+            value = int(value_text, 16)
+            if value < 0 or value > 0xFFFFFFFF:
+                raise ValueError(f'R{5 - idx} out of range (0..0xFFFFFFFF)')
+            regs_r5_to_r0.append(value)
+
+        return list(reversed(regs_r5_to_r0))
 
 
 class SerialReader(threading.Thread):
@@ -263,7 +319,13 @@ class MainWindow(QWidget):
         pll1_layout.addWidget(self.pll1_freq_main)
         self.set_pll1_btn = QPushButton('Set O/P 1')
         self.set_pll1_btn.clicked.connect(self.open_set_pll1_dialog)
-        pll1_layout.addWidget(self.set_pll1_btn)
+        self.set_pll1_regs_btn = QPushButton('Registers')
+        self.set_pll1_regs_btn.setMaximumWidth(90)
+        self.set_pll1_regs_btn.clicked.connect(self.open_set_pll1_registers_dialog)
+        pll1_btn_row = QHBoxLayout()
+        pll1_btn_row.addWidget(self.set_pll1_btn)
+        pll1_btn_row.addWidget(self.set_pll1_regs_btn)
+        pll1_layout.addLayout(pll1_btn_row)
         pll1_box.setLayout(pll1_layout)
 
         pll2_box = QGroupBox('PLL2')
@@ -274,7 +336,13 @@ class MainWindow(QWidget):
         pll2_layout.addWidget(self.pll2_freq_main)
         self.set_pll2_btn = QPushButton('Set O/P 2')
         self.set_pll2_btn.clicked.connect(self.open_set_pll2_dialog)
-        pll2_layout.addWidget(self.set_pll2_btn)
+        self.set_pll2_regs_btn = QPushButton('Registers')
+        self.set_pll2_regs_btn.setMaximumWidth(90)
+        self.set_pll2_regs_btn.clicked.connect(self.open_set_pll2_registers_dialog)
+        pll2_btn_row = QHBoxLayout()
+        pll2_btn_row.addWidget(self.set_pll2_btn)
+        pll2_btn_row.addWidget(self.set_pll2_regs_btn)
+        pll2_layout.addLayout(pll2_btn_row)
         pll2_box.setLayout(pll2_layout)
 
         pll_row = QHBoxLayout()
@@ -772,6 +840,48 @@ class MainWindow(QWidget):
     def open_set_pll2_dialog(self):
         self._open_set_pll_dialog('PLL2', 'adf2', 116.0)
 
+    def open_set_pll1_registers_dialog(self):
+        self._open_set_pll_registers_dialog('PLL1', 'adf1')
+
+    def open_set_pll2_registers_dialog(self):
+        self._open_set_pll_registers_dialog('PLL2', 'adf2')
+
+    def _open_set_pll_registers_dialog(self, pll_name, firmware_cmd):
+        if not self.serial or not self.serial.is_open:
+            self.log_text.append('Not connected')
+            QMessageBox.warning(self, 'Not connected', 'Connect to the device before setting PLL registers.')
+            return
+
+        dlg = RawRegistersDialog(
+            pll_name=pll_name,
+            default_raw_regs=self.latest_regs.get(firmware_cmd),
+            parent=self,
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        try:
+            regs_r0_to_r5 = dlg.registers_r0_to_r5()
+        except Exception as e:
+            msg = f'{pll_name} raw register input is invalid:\n{e}'
+            QMessageBox.warning(self, f'{pll_name} Invalid Registers', msg)
+            self.log_text.append(msg)
+            return
+
+        try:
+            set_all_cmd = json.dumps({
+                'cmd': firmware_cmd,
+                'action': 'set_all',
+                'regs': [int(x) for x in regs_r0_to_r5],
+                'program': True,
+            })
+            if not self._serial_write_line(set_all_cmd):
+                return
+            self.log_text.append(f'{pll_name} apply sent: raw hex registers')
+            self._request_adf_show_delayed(firmware_cmd, delay_ms=250)
+        except Exception as e:
+            self.log_text.append(f'Failed to send {pll_name} raw registers: {e}')
+
     def _open_set_pll_dialog(self, pll_name, firmware_cmd, default_freq_mhz):
         if not self.serial or not self.serial.is_open:
             self.log_text.append('Not connected')
@@ -789,8 +899,8 @@ class MainWindow(QWidget):
         )
         if dlg.exec() != QDialog.Accepted:
             return
-
         vals = dlg.values()
+
         int_cfg = ADF4351Config(
             ref_hz=vals['ref_hz'],
             r_counter=vals['r_counter'],

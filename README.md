@@ -33,6 +33,7 @@ This README is for users who want to **flash**, **run**, and **use** the project
 - `firmware/` – PlatformIO project for Pico 2
 - `monitor/` – Python GUI monitor/config app
 - `.github/workflows/` – release build automation
+- `REFERENCE_LOCKING_README.md` – technical notes on GPS reference locking, PIO timing, interrupts, and timing/error budget
 
 ## Quick start (recommended)
 ### 1) Download a Release

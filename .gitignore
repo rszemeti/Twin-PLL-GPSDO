@@ -29,3 +29,7 @@ pip-wheel-metadata/
 .coverage
 .coverage.*
 htmlcov/
+
+# EAGLE backup files
+*.s#*
+*.b#*
