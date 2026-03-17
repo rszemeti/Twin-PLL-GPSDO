@@ -14,7 +14,7 @@ This README is for users who want to **flash**, **run**, and **use** the project
 - **Live status** (GPS fix/lock, satellites, DOP, alarm, lock states)
 - **Windows configuration tool** with Main/Details/Advamced/About tabs
 
-## RF/output notes (important)
+## RF output notes
 - **Two outputs are fully independent**: each PLL output has its own register set and can be tuned separately.
 - **Frequency range**: any frequency within the ADF4351 synthesizer output range is supported in software (approximately **34.375 MHz to 4.4 GHz**).
 	- Practical usable range depends on your board layout, output network, filtering, and measurement method.

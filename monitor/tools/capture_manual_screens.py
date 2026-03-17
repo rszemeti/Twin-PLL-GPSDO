@@ -13,6 +13,7 @@ if str(MONITOR_DIR) not in sys.path:
     sys.path.insert(0, str(MONITOR_DIR))
 
 from gpsdo_monitor import MainWindow, PLLConfigDialog, RawRegistersDialog
+from adf4351_registers import ADF4351Config, ADF4351RegisterCalculator
 
 
 DEMO_REGS_R0_TO_R5 = [
@@ -25,6 +26,22 @@ DEMO_REGS_R0_TO_R5 = [
 ]
 
 
+def _build_demo_regs(target_mhz, integer_n):
+    cfg = ADF4351Config(
+        ref_hz=10_000_000.0,
+        r_counter=5,
+        integer_n=bool(integer_n),
+        channel_spacing_hz=1.0,
+        prescaler='auto',
+        band_select_clock_div=150,
+        rf_output_power_code=3,
+        noise_mode='low_noise',
+        charge_pump_code=7,
+    )
+    solution = ADF4351RegisterCalculator(cfg).solve(float(target_mhz) * 1_000_000.0)
+    return [int(v) for v in solution.registers_r0_to_r5]
+
+
 def _save_widget_png(widget, out_path):
     widget.show()
     QApplication.processEvents()
@@ -35,6 +52,9 @@ def _save_widget_png(widget, out_path):
 
 
 def _seed_demo_data(window):
+    pll1_int_regs = _build_demo_regs(128.0, integer_n=True)
+    pll2_frac_regs = _build_demo_regs(168.7537, integer_n=False)
+
     window.handle_json(
         {
             'gps_fix': True,
@@ -59,7 +79,7 @@ def _seed_demo_data(window):
             'cmd': 'adf_regs',
             'status': 'ok',
             'name': 'adf1',
-            'regs': DEMO_REGS_R0_TO_R5,
+            'regs': pll1_int_regs,
         }
     )
     window.handle_json(
@@ -67,7 +87,7 @@ def _seed_demo_data(window):
             'cmd': 'adf_regs',
             'status': 'ok',
             'name': 'adf2',
-            'regs': DEMO_REGS_R0_TO_R5,
+            'regs': pll2_frac_regs,
         }
     )
 

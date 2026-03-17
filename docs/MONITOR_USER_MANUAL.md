@@ -46,6 +46,8 @@ Screenshot source:
 - **PLL2** with **Set O/P 2** and **Registers**
 
 The frequency text in each card is decoded from live register readback.
+Each PLL card also shows a top-right synthesis mode badge from live register decode: **Int N** (green) or **Frac. N** (yellow).
+In this manual screenshot set, the Main view intentionally shows PLL1 as a clean Integer-N example and PLL2 as a clearly Fractional-N example.
 
 ### 4.2 Front Status
 - GPS Fix
@@ -94,8 +96,9 @@ Use this for normal operation.
    - Auto (prefer Integer-N, fallback Fractional-N)
    - Integer-N only
    - Fractional-N only
-4. Optionally tune RF power / noise mode / charge pump current.
-5. Click OK to send computed `set_all` registers and program the device.
+4. Check the read-only **Channel step** line to see effective tuning resolution for the current reference/R/mode combination.
+5. Optionally tune RF power / noise mode / charge pump current.
+6. Click OK to send computed `set_all` registers and program the device.
 
 ### 5.2 Set O/P 2
 Same process as PLL1.

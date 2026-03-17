@@ -86,6 +86,9 @@ class PLLConfigDialog(QDialog):
             self.charge_pump.addItem(label, code)
         self.charge_pump.setCurrentIndex(7)
 
+        self.channel_step = QLabel('-')
+        self.channel_step.setStyleSheet('color: #aeb7c2; font-weight: 600;')
+
         form.addRow('Output frequency', self.freq_mhz)
         form.addRow('Reference', self.ref_mhz)
         form.addRow('R counter', self.r_counter)
@@ -93,6 +96,13 @@ class PLLConfigDialog(QDialog):
         form.addRow('RF output power', self.rf_power)
         form.addRow('Noise mode', self.noise_mode)
         form.addRow('Charge pump current', self.charge_pump)
+        form.addRow('Channel step', self.channel_step)
+
+        self.freq_mhz.valueChanged.connect(self._update_channel_step)
+        self.ref_mhz.valueChanged.connect(self._update_channel_step)
+        self.r_counter.valueChanged.connect(self._update_channel_step)
+        self.synth_mode.currentIndexChanged.connect(self._update_channel_step)
+        self._update_channel_step()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -114,6 +124,76 @@ class PLLConfigDialog(QDialog):
             'noise_mode': self.noise_mode.currentData(),
             'charge_pump_code': self.charge_pump.currentData(),
         }
+
+    def _format_hz(self, value_hz):
+        value = float(value_hz)
+        abs_value = abs(value)
+        if abs_value >= 1_000_000.0:
+            return f'{value / 1_000_000.0:.6f} MHz'
+        if abs_value >= 1_000.0:
+            return f'{value / 1_000.0:.3f} kHz'
+        return f'{value:.3f} Hz'
+
+    def _select_solution(self, int_solution, frac_solution):
+        synth_mode = self.synth_mode.currentData()
+        if synth_mode == 'int':
+            return int_solution, 'Integer-N'
+        if synth_mode == 'frac':
+            return frac_solution, 'Fractional-N'
+        if int_solution is not None and abs(float(int_solution.error_hz)) <= 1e-3:
+            return int_solution, 'Integer-N (auto)'
+        if frac_solution is not None:
+            return frac_solution, 'Fractional-N (auto)'
+        if int_solution is not None:
+            return int_solution, 'Integer-N (auto)'
+        return None, ''
+
+    def _update_channel_step(self, *_):
+        try:
+            vals = self.values()
+            int_cfg = ADF4351Config(
+                ref_hz=vals['ref_hz'],
+                r_counter=vals['r_counter'],
+                integer_n=True,
+                prescaler='auto',
+                band_select_clock_div=150,
+                rf_output_power_code=vals.get('rf_output_power_code', 3),
+                noise_mode=vals.get('noise_mode', 'low_noise'),
+                charge_pump_code=vals.get('charge_pump_code', 7),
+            )
+            frac_cfg = ADF4351Config(
+                ref_hz=vals['ref_hz'],
+                r_counter=vals['r_counter'],
+                integer_n=False,
+                channel_spacing_hz=1.0,
+                prescaler='auto',
+                band_select_clock_div=150,
+                rf_output_power_code=vals.get('rf_output_power_code', 3),
+                noise_mode=vals.get('noise_mode', 'low_noise'),
+                charge_pump_code=vals.get('charge_pump_code', 7),
+            )
+
+            int_solution = None
+            frac_solution = None
+            try:
+                int_solution = ADF4351RegisterCalculator(int_cfg).solve(vals['target_hz'])
+            except Exception:
+                pass
+            try:
+                frac_solution = ADF4351RegisterCalculator(frac_cfg).solve(vals['target_hz'])
+            except Exception:
+                pass
+
+            solution, mode_label = self._select_solution(int_solution, frac_solution)
+            if solution is None:
+                self.channel_step.setText('Unavailable for current settings')
+                return
+
+            mod_value = int(solution.mod_value) if int(solution.mod_value) > 0 else 1
+            step_hz = float(solution.pfd_hz) / float(mod_value * int(solution.output_divider))
+            self.channel_step.setText(f'{mode_label}: {self._format_hz(step_hz)}')
+        except Exception:
+            self.channel_step.setText('-')
 
 
 class RawRegistersDialog(QDialog):
@@ -545,9 +625,15 @@ class MainWindow(QWidget):
         # PLL quick-control cards (main tab)
         pll1_box = QGroupBox('PLL1')
         pll1_layout = QVBoxLayout()
+        pll1_header = QHBoxLayout()
+        pll1_header.addStretch(1)
+        self.pll1_mode_main = QLabel('-')
+        self.pll1_mode_main.setStyleSheet('font-size: 11px; font-weight: 700; color: #aeb7c2;')
+        pll1_header.addWidget(self.pll1_mode_main)
+        pll1_layout.addLayout(pll1_header)
         pll1_layout.addWidget(QLabel('Frequency'))
         self.pll1_freq_main = QLabel('-')
-        self.pll1_freq_main.setStyleSheet('font-size: 16px; font-weight: 700; color: #7ee787;')
+        self.pll1_freq_main.setStyleSheet('font-size: 16px; font-weight: 700; color: #79c0ff;')
         pll1_layout.addWidget(self.pll1_freq_main)
         self.set_pll1_btn = QPushButton('Set O/P 1')
         self.set_pll1_btn.clicked.connect(self.open_set_pll1_dialog)
@@ -562,6 +648,12 @@ class MainWindow(QWidget):
 
         pll2_box = QGroupBox('PLL2')
         pll2_layout = QVBoxLayout()
+        pll2_header = QHBoxLayout()
+        pll2_header.addStretch(1)
+        self.pll2_mode_main = QLabel('-')
+        self.pll2_mode_main.setStyleSheet('font-size: 11px; font-weight: 700; color: #aeb7c2;')
+        pll2_header.addWidget(self.pll2_mode_main)
+        pll2_layout.addLayout(pll2_header)
         pll2_layout.addWidget(QLabel('Frequency'))
         self.pll2_freq_main = QLabel('-')
         self.pll2_freq_main.setStyleSheet('font-size: 16px; font-weight: 700; color: #79c0ff;')
@@ -1148,16 +1240,21 @@ class MainWindow(QWidget):
                 txt = '\n'.join([f'R{i}: 0x{v:08X}' for i,v in enumerate(regs)])
                 decoded_text = self._decode_adf_regs_text(regs)
                 freq_mhz_text = self._decode_adf_freq_mhz_text(regs)
+                mode_text, mode_style = self._decode_adf_mode(regs)
                 if name.lower().startswith('adf1'):
                     self.latest_regs['adf1'] = [int(v) for v in regs]
                     self.adf1_regs_text.setPlainText(txt)
                     self.adf1_freq.setText(decoded_text)
                     self.pll1_freq_main.setText(freq_mhz_text)
+                    self.pll1_mode_main.setText(mode_text)
+                    self.pll1_mode_main.setStyleSheet(mode_style)
                 else:
                     self.latest_regs['adf2'] = [int(v) for v in regs]
                     self.adf2_regs_text.setPlainText(txt)
                     self.adf2_freq.setText(decoded_text)
                     self.pll2_freq_main.setText(freq_mhz_text)
+                    self.pll2_mode_main.setText(mode_text)
+                    self.pll2_mode_main.setStyleSheet(mode_style)
                 self.log_text.append(json.dumps(obj))
                 return
             if 'gps_fix' in obj:
@@ -1276,6 +1373,16 @@ class MainWindow(QWidget):
             return f"{decoded.rf_out_hz/1_000_000.0:.6f} MHz"
         except Exception:
             return '-'
+
+    def _decode_adf_mode(self, regs):
+        try:
+            words = [int(v) for v in regs]
+            decoded = ADF4351RegisterCalculator.decode_registers(words, ref_hz=self.decode_ref_hz)
+            if int(decoded.frac_value) == 0:
+                return 'Int N', 'font-size: 11px; font-weight: 700; color: #7ee787;'
+            return 'Frac. N', 'font-size: 11px; font-weight: 700; color: #ffd60a;'
+        except Exception:
+            return '-', 'font-size: 11px; font-weight: 700; color: #aeb7c2;'
 
     def _suggest_pll_defaults(self, firmware_cmd, fallback_freq_mhz):
         defaults = {
