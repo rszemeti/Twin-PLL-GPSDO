@@ -117,16 +117,23 @@ jobs:
       - name: Build versioned manual markdown
         run: |
           mkdir -p build release-assets
-          sed "s/{{RELEASE_TAG}}/${RELEASE_TAG}/g" docs/MONITOR_USER_MANUAL.md > build/MONITOR_USER_MANUAL.release.md
+          sed "s/{{RELEASE_TAG}}/${RELEASE_TAG}/g" docs/MONITOR_USER_MANUAL.md > docs/MONITOR_USER_MANUAL.release.md
 
       - name: Render monitor manual PDF
         run: |
-          pandoc build/MONITOR_USER_MANUAL.release.md \
+          # Keep image assets visible in CI PDF output:
+          # - resource-path includes docs and screenshot folder lookups
+          # - enable-local-file-access lets wkhtmltopdf embed local files
+          pandoc docs/MONITOR_USER_MANUAL.release.md \
             --from gfm \
-            --resource-path=docs \
+            --resource-path=docs:docs/screenshots \
             --pdf-engine=wkhtmltopdf \
+            --pdf-engine-opt=--enable-local-file-access \
             -V geometry:margin=1in \
             -o "release-assets/Twin-PLL-GPSDO-Monitor-Manual-${RELEASE_TAG}.pdf"
+
+      - name: Cleanup versioned manual markdown
+        run: rm -f docs/MONITOR_USER_MANUAL.release.md
 
       - name: Upload manual PDF artifact
         uses: actions/upload-artifact@v7.0.0
