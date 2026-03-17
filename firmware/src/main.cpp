@@ -1,0 +1,1049 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include "hardware/clocks.h"
+#include "config.h"
+#include "adf4351.h"
+#include "mcp4725.h"
+#include "gps.h"
+#include "discipliner.h"
+#include "status.h"
+#include "pio_timing.h"
+#include <EEPROM.h>
+#include <LittleFS.h>
+#include <ArduinoJson.h>
+#include "pico/multicore.h"
+
+// Firmware version
+static const char* FW_VERSION = "0.1.0";
+
+// Helper: emit a compact JSON response to Serial with an optional newline
+static void sendJsonMessage(const char* status, const char* msg = nullptr) {
+    StaticJsonDocument<192> d;
+    d["status"] = status;
+    if (msg) d["msg"] = msg;
+    serializeJson(d, Serial);
+    Serial.println();
+}
+
+static void sendJsonKV(const char* status, const char* key, int value) {
+    StaticJsonDocument<192> d;
+    d["status"] = status;
+    d[key] = value;
+    serializeJson(d, Serial);
+    Serial.println();
+}
+
+static void sendTrace(const char* cmd, const char* step) {
+#if ADF_TRACE_ENABLED
+    StaticJsonDocument<192> d;
+    d["status"] = "debug";
+    d["event"] = "trace";
+    d["cmd"] = cmd;
+    d["step"] = step;
+    serializeJson(d, Serial);
+    Serial.println();
+#else
+    (void)cmd;
+    (void)step;
+#endif
+}
+
+// Mutable ADF register arrays (initialised from config defaults)
+static uint32_t adf1_regs[6];
+static uint32_t adf2_regs[6];
+static bool adfEepromCommitPending = false;
+static uint32_t adfEepromPendingMask = 0;
+static uint32_t adfEepromCommitDueMs = 0;
+static bool adfFsReady = false;
+static bool adf1PersistDirty = false;
+static bool adf2PersistDirty = false;
+
+struct ADFRegsBlob {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t regs[6];
+};
+
+static const char* adfPersistPath(uint32_t eepromAddr) {
+    return (eepromAddr == ADF1_EEPROM_ADDR) ? "/adf1_regs.bin" : "/adf2_regs.bin";
+}
+
+static uint32_t adfPersistDirtyMask() {
+    return (adf1PersistDirty ? 0x1u : 0u) | (adf2PersistDirty ? 0x2u : 0u);
+}
+
+static void scheduleADFEEPROMCommit() {
+    adfEepromCommitPending = true;
+    adfEepromPendingMask = adfPersistDirtyMask();
+    adfEepromCommitDueMs = millis() + (uint32_t)ADF_EEPROM_COMMIT_DELAY_MS;
+}
+
+static void stageADFRegsPersist(uint32_t eepromAddr) {
+    if (eepromAddr == ADF1_EEPROM_ADDR) adf1PersistDirty = true;
+    if (eepromAddr == ADF2_EEPROM_ADDR) adf2PersistDirty = true;
+}
+
+static void writeADFRegsEEPROMBlock(const uint32_t regs[6], uint32_t eepromAddr) {
+    uint32_t magic = ADF_REGS_MAGIC;
+    uint32_t version = ADF_REGS_VERSION;
+    EEPROM.put(eepromAddr, magic);
+    EEPROM.put(eepromAddr + sizeof(magic), version);
+    for (int i = 0; i < 6; ++i) {
+        EEPROM.put(eepromAddr + sizeof(magic) + sizeof(version) + i * sizeof(uint32_t), regs[i]);
+    }
+}
+
+static bool commitStagedADFRegsToEEPROM() {
+    const uint32_t mask = adfPersistDirtyMask();
+    if (mask == 0) {
+        return true;
+    }
+
+    if (adf1PersistDirty) writeADFRegsEEPROMBlock(adf1_regs, ADF1_EEPROM_ADDR);
+    if (adf2PersistDirty) writeADFRegsEEPROMBlock(adf2_regs, ADF2_EEPROM_ADDR);
+
+    sendTrace("adf_persist", "commit_pre");
+    bool committed = false;
+#if ADF_EEPROM_USE_LOCKOUT
+    sendTrace("adf_persist", "lockout_enter");
+    multicore_lockout_start_blocking();
+    committed = EEPROM.commit();
+    multicore_lockout_end_blocking();
+    sendTrace("adf_persist", "lockout_exit");
+#else
+    // Gate PIO interrupt sources globally during commit.
+    sendTrace("adf_persist", "pio_irq_src_off");
+    pio_set_irq0_source_enabled(pio0, pis_interrupt0, false);
+    pio_set_irq1_source_enabled(pio0, pis_interrupt1, false);
+
+    sendTrace("adf_persist", "commit_call");
+    committed = EEPROM.commit();
+    sendTrace("adf_persist", "commit_return");
+
+    pio_set_irq0_source_enabled(pio0, pis_interrupt0, true);
+    pio_set_irq1_source_enabled(pio0, pis_interrupt1, true);
+    sendTrace("adf_persist", "pio_irq_src_on");
+#endif
+    sendTrace("adf_persist", committed ? "commit_ok" : "commit_fail");
+
+    if (committed) {
+        StaticJsonDocument<192> dj;
+        dj["status"] = "info";
+        dj["event"] = "eeprom_write_success";
+        dj["component"] = "adf_persist";
+        dj["mask"] = mask;
+        serializeJson(dj, Serial);
+        Serial.println();
+
+        adf1PersistDirty = false;
+        adf2PersistDirty = false;
+    }
+    return committed;
+}
+// Presence/attempt tracking
+enum class PeripheralStatus { PS_UNKNOWN=0, PS_OK=1, PS_ABSENT=2 };
+static PeripheralStatus haveDAC = PeripheralStatus::PS_UNKNOWN;
+static PeripheralStatus haveADF1 = PeripheralStatus::PS_UNKNOWN;
+static PeripheralStatus haveADF2 = PeripheralStatus::PS_UNKNOWN;
+static int adf1_attempts = 0;
+static int adf2_attempts = 0;
+static const int MAX_ADF_ATTEMPTS = 3;
+
+// forward declarations for CLI helper usage (instances defined below)
+extern ADF4351 adf1;
+extern ADF4351 adf2;
+extern Discipliner disc;
+
+// Helper: load regs from EEPROM if magic/version match, otherwise use defaults
+static void loadADFRegs(uint32_t regs[6], const uint32_t defaults[6], uint32_t eepromAddr) {
+    if (adfFsReady) {
+        const char* path = adfPersistPath(eepromAddr);
+        File f = LittleFS.open(path, "r");
+        if (f) {
+            ADFRegsBlob blob{};
+            size_t n = f.read((uint8_t*)&blob, sizeof(blob));
+            f.close();
+            if (n == sizeof(blob) && blob.magic == ADF_REGS_MAGIC && blob.version == ADF_REGS_VERSION) {
+                for (int i = 0; i < 6; ++i) regs[i] = blob.regs[i];
+                StaticJsonDocument<192> dj;
+                dj["status"] = "info";
+                dj["event"] = "loaded_adf_regs";
+                dj["path"] = path;
+                serializeJson(dj, Serial);
+                Serial.println();
+                return;
+            }
+        }
+    }
+
+    // Fallback: read persisted ADF registers from EEPROM block format.
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    EEPROM.get((int)eepromAddr, magic);
+    EEPROM.get((int)(eepromAddr + sizeof(magic)), version);
+    if (magic == ADF_REGS_MAGIC && version == ADF_REGS_VERSION) {
+        for (int i = 0; i < 6; ++i) {
+            uint32_t v = 0;
+            EEPROM.get((int)(eepromAddr + sizeof(magic) + sizeof(version) + i * sizeof(uint32_t)), v);
+            regs[i] = v;
+        }
+        StaticJsonDocument<192> dj;
+        dj["status"] = "info";
+        dj["event"] = "loaded_adf_regs";
+        dj["eeprom_addr"] = (unsigned)eepromAddr;
+        serializeJson(dj, Serial);
+        Serial.println();
+        return;
+    }
+
+    for (int i = 0; i < 6; ++i) regs[i] = defaults[i];
+    {
+        StaticJsonDocument<192> dj;
+        dj["status"] = "info";
+        dj["event"] = "using_default_adf_regs";
+        dj["eeprom_addr"] = (unsigned)eepromAddr;
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+}
+
+static bool saveADFRegs(uint32_t regs[6], uint32_t eepromAddr) {
+#if !ADF_PERSIST_EEPROM
+    (void)regs;
+    stageADFRegsPersist(eepromAddr);
+#if ADF_AUTO_COMMIT_STAGED
+    scheduleADFEEPROMCommit();
+#endif
+    {
+        StaticJsonDocument<192> dj;
+        dj["status"] = "info";
+        dj["event"] = "saved_adf_regs";
+        dj["eeprom_addr"] = (unsigned)eepromAddr;
+        dj["staged"] = true;
+        dj["pending_mask"] = adfPersistDirtyMask();
+        dj["skipped"] = true;
+        dj["committed"] = false;
+#if ADF_AUTO_COMMIT_STAGED
+        dj["auto_commit"] = true;
+#else
+        dj["auto_commit"] = false;
+#endif
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+    return true;
+#else
+    if (!adfFsReady) {
+        sendJsonMessage("error", "adf_persist_fs_not_ready");
+        return false;
+    }
+
+    const char* path = adfPersistPath(eepromAddr);
+    {
+        StaticJsonDocument<160> dj;
+        dj["status"] = "debug";
+        dj["event"] = "adf_persist_write_start";
+        dj["path"] = path;
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+
+    ADFRegsBlob blob{};
+    blob.magic = ADF_REGS_MAGIC;
+    blob.version = ADF_REGS_VERSION;
+    for (int i = 0; i < 6; ++i) blob.regs[i] = regs[i];
+
+    File f = LittleFS.open(path, "w");
+    if (!f) {
+        sendJsonMessage("error", "adf_persist_open_failed");
+        return false;
+    }
+    size_t n = f.write((const uint8_t*)&blob, sizeof(blob));
+    f.flush();
+    f.close();
+    bool committed = (n == sizeof(blob));
+
+    {
+        StaticJsonDocument<192> dj;
+        dj["status"] = committed ? "info" : "error";
+        dj["event"] = "saved_adf_regs";
+        dj["path"] = path;
+        dj["committed"] = committed;
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+    return committed;
+#endif
+}
+
+static void serviceADFEEPROMCommit() {
+#if !ADF_PERSIST_EEPROM
+#if ADF_AUTO_COMMIT_STAGED
+    if (!adfEepromCommitPending) return;
+
+    if ((int32_t)(millis() - adfEepromCommitDueMs) < 0) return;
+
+    const uint32_t pendingMask = adfEepromPendingMask;
+    const bool committed = commitStagedADFRegsToEEPROM();
+
+    StaticJsonDocument<192> dj;
+    dj["status"] = committed ? "info" : "error";
+    dj["event"] = "adf_persist_auto_commit";
+    dj["committed"] = committed;
+    dj["pending_mask"] = pendingMask;
+    dj["remaining_mask"] = adfPersistDirtyMask();
+    serializeJson(dj, Serial);
+    Serial.println();
+
+    adfEepromCommitPending = false;
+    adfEepromPendingMask = 0;
+#endif
+    return;
+#else
+    // ADF persistence now uses LittleFS immediate file writes, no deferred EEPROM commit.
+    return;
+
+    if (!adfEepromCommitPending) return;
+
+    // millis rollover-safe due-time check
+    if ((int32_t)(millis() - adfEepromCommitDueMs) < 0) return;
+
+    {
+        StaticJsonDocument<96> dj;
+        dj["status"] = "debug";
+        dj["event"] = "eep_pre";
+        dj["mask"] = adfEepromPendingMask;
+        serializeJson(dj, Serial);
+        Serial.println();
+        Serial.flush();
+        delay((uint32_t)ADF_EEPROM_DEBUG_SLEEP_MS);
+    }
+
+    bool committed = false;
+#if ADF_EEPROM_USE_LOCKOUT
+    {
+        StaticJsonDocument<96> dj;
+        dj["status"] = "debug";
+        dj["event"] = "eep_lock";
+        serializeJson(dj, Serial);
+        Serial.println();
+        Serial.flush();
+        delay((uint32_t)ADF_EEPROM_DEBUG_SLEEP_MS);
+    }
+    multicore_lockout_start_blocking();
+    committed = EEPROM.commit();
+    multicore_lockout_end_blocking();
+#else
+    committed = EEPROM.commit();
+#endif
+
+    {
+        StaticJsonDocument<96> dj;
+        dj["status"] = committed ? "info" : "error";
+        dj["event"] = "eep_done";
+        dj["mask"] = adfEepromPendingMask;
+        dj["ok"] = committed;
+        serializeJson(dj, Serial);
+        Serial.println();
+        Serial.flush();
+        delay((uint32_t)ADF_EEPROM_DEBUG_SLEEP_MS);
+    }
+
+    adfEepromCommitPending = false;
+    adfEepromPendingMask = 0;
+#endif
+}
+
+static bool programAndPersistADF(ADF4351& adf, uint32_t regs[6], uint32_t eepromAddr, PeripheralStatus availability) {
+    bool programmed = false;
+    if (availability == PeripheralStatus::PS_OK) {
+        sendTrace("adf", "before_program");
+        adf.program(regs);
+        programmed = true;
+        sendTrace("adf", "after_program");
+    }
+    sendTrace("adf", "before_save");
+    saveADFRegs(regs, eepromAddr);
+    sendTrace("adf", "after_save");
+    return programmed;
+}
+
+// CLI helpers
+static void printADFRegs(const char *name, uint32_t regs[6]) {
+    StaticJsonDocument<384> dj;
+    dj["status"] = "ok";
+    dj["cmd"] = "adf_regs";
+    dj["name"] = name;
+    JsonArray arr = dj.createNestedArray("regs");
+    for (int i = 0; i < 6; ++i) {
+        arr.add(regs[i]);
+    }
+    serializeJson(dj, Serial);
+    Serial.println();
+}
+
+// ------------------------------------------------------------------
+// CLI RX FIFO buffering
+// ------------------------------------------------------------------
+static const int CLI_QUEUE_DEPTH = 16;
+static String cliQueue[CLI_QUEUE_DEPTH];
+static int cliQueueHead = 0;
+static int cliQueueTail = 0;
+static int cliQueueCount = 0;
+static String cliRxLine;
+
+static bool enqueueCLICommand(const String& cmd) {
+    if (cliQueueCount >= CLI_QUEUE_DEPTH) return false;
+    cliQueue[cliQueueTail] = cmd;
+    cliQueueTail = (cliQueueTail + 1) % CLI_QUEUE_DEPTH;
+    cliQueueCount++;
+    return true;
+}
+
+static bool dequeueCLICommand(String& out) {
+    if (cliQueueCount <= 0) return false;
+    out = cliQueue[cliQueueHead];
+    cliQueueHead = (cliQueueHead + 1) % CLI_QUEUE_DEPTH;
+    cliQueueCount--;
+    return true;
+}
+
+static void pollSerialIntoCLIQueue() {
+    while (Serial.available()) {
+        char ch = (char)Serial.read();
+        if (ch == '\r') continue;
+        if (ch == '\n') {
+            String line = cliRxLine;
+            cliRxLine = "";
+            line.trim();
+            if (line.length() == 0) continue;
+            if (!enqueueCLICommand(line)) {
+                sendJsonMessage("error", "cli_rx_fifo_overflow");
+            }
+        } else {
+            cliRxLine += ch;
+            if (cliRxLine.length() > 600) {
+                // Prevent pathological growth on malformed input.
+                cliRxLine = "";
+                sendJsonMessage("error", "cli_line_too_long");
+            }
+        }
+    }
+}
+
+static void handleCLI(String s) {
+    s.trim();
+    if (s.length() == 0) return;
+    // If the input looks like JSON, parse it using ArduinoJson
+    if (s.startsWith("{")) {
+        StaticJsonDocument<768> doc;
+        DeserializationError err = deserializeJson(doc, s);
+        if (err) {
+            sendJsonMessage("error", "JSON parse error");
+            return;
+        }
+        const char* cmd = doc["cmd"];
+        if (!cmd) return;
+        if (strcmp(cmd, "adf1") == 0) {
+            const char* action = doc["action"];
+            if (!action) return;
+            if (strcmp(action, "show") == 0) printADFRegs("ADF1", adf1_regs);
+            else if (strcmp(action, "save") == 0) saveADFRegs(adf1_regs, ADF1_EEPROM_ADDR);
+            else if (strcmp(action, "load") == 0) {
+                loadADFRegs(adf1_regs, ADF1_REGS, ADF1_EEPROM_ADDR);
+                if (haveADF1 == PeripheralStatus::PS_OK) {
+                    adf1.program(adf1_regs);
+                } else {
+                    sendJsonMessage("info", "adf1_unavailable_skip_program");
+                }
+            }
+            else if (strcmp(action, "program") == 0) {
+                bool programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1);
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "adf1";
+                dj["action"] = "program";
+                dj["programmed"] = programmed;
+                serializeJson(dj, Serial);
+                Serial.println();
+            }
+            else if (strcmp(action, "default") == 0) for (int i=0;i<6;i++) adf1_regs[i]=ADF1_REGS[i];
+            else if (strcmp(action, "set_all") == 0) {
+                JsonVariant regsVar = doc["regs"];
+                if (!regsVar.is<JsonArray>()) {
+                    sendJsonMessage("error", "set_all requires regs array");
+                    return;
+                }
+                JsonArray regsArr = regsVar.as<JsonArray>();
+                if (regsArr.size() != 6) {
+                    sendJsonMessage("error", "set_all requires exactly 6 regs");
+                    return;
+                }
+                uint32_t newRegs[6];
+                int idx = 0;
+                for (JsonVariant v : regsArr) {
+                    if (!v.is<uint32_t>()) {
+                        sendJsonMessage("error", "set_all regs must be uint32");
+                        return;
+                    }
+                    newRegs[idx++] = v.as<uint32_t>();
+                }
+                for (int i = 0; i < 6; ++i) adf1_regs[i] = newRegs[i];
+
+                bool doProgram = doc["program"] | true;
+                bool programmed = false;
+                if (doProgram) {
+                    sendTrace("adf1", "set_all_before_program_persist");
+                    programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1);
+                    sendTrace("adf1", "set_all_after_program_persist");
+                }
+
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "adf1";
+                dj["action"] = "set_all";
+                dj["program"] = doProgram;
+                dj["programmed"] = programmed;
+                serializeJson(dj, Serial);
+                Serial.println();
+            }
+            else if (strcmp(action, "set") == 0) {
+                int idx = doc["index"] | -1;
+                uint32_t val = doc["value"] | 0;
+                if (idx >=0 && idx < 6) {
+                    adf1_regs[idx] = val;
+                    StaticJsonDocument<192> dj;
+                    dj["status"] = "ok";
+                    dj["cmd"] = "adf1";
+                    dj["index"] = idx;
+                    dj["value"] = val;
+                    serializeJson(dj, Serial);
+                    Serial.println();
+                }
+            }
+        } else if (strcmp(cmd, "adf2") == 0) {
+            const char* action = doc["action"];
+            if (!action) return;
+            if (strcmp(action, "show") == 0) printADFRegs("ADF2", adf2_regs);
+            else if (strcmp(action, "save") == 0) saveADFRegs(adf2_regs, ADF2_EEPROM_ADDR);
+            else if (strcmp(action, "load") == 0) {
+                loadADFRegs(adf2_regs, ADF2_REGS, ADF2_EEPROM_ADDR);
+                if (haveADF2 == PeripheralStatus::PS_OK) {
+                    adf2.program(adf2_regs);
+                } else {
+                    sendJsonMessage("info", "adf2_unavailable_skip_program");
+                }
+            }
+            else if (strcmp(action, "program") == 0) {
+                bool programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2);
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "adf2";
+                dj["action"] = "program";
+                dj["programmed"] = programmed;
+                serializeJson(dj, Serial);
+                Serial.println();
+            }
+            else if (strcmp(action, "default") == 0) for (int i=0;i<6;i++) adf2_regs[i]=ADF2_REGS[i];
+            else if (strcmp(action, "set_all") == 0) {
+                JsonVariant regsVar = doc["regs"];
+                if (!regsVar.is<JsonArray>()) {
+                    sendJsonMessage("error", "set_all requires regs array");
+                    return;
+                }
+                JsonArray regsArr = regsVar.as<JsonArray>();
+                if (regsArr.size() != 6) {
+                    sendJsonMessage("error", "set_all requires exactly 6 regs");
+                    return;
+                }
+                uint32_t newRegs[6];
+                int idx = 0;
+                for (JsonVariant v : regsArr) {
+                    if (!v.is<uint32_t>()) {
+                        sendJsonMessage("error", "set_all regs must be uint32");
+                        return;
+                    }
+                    newRegs[idx++] = v.as<uint32_t>();
+                }
+                for (int i = 0; i < 6; ++i) adf2_regs[i] = newRegs[i];
+
+                bool doProgram = doc["program"] | true;
+                bool programmed = false;
+                if (doProgram) {
+                    sendTrace("adf2", "set_all_before_program_persist");
+                    programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2);
+                    sendTrace("adf2", "set_all_after_program_persist");
+                }
+
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "adf2";
+                dj["action"] = "set_all";
+                dj["program"] = doProgram;
+                dj["programmed"] = programmed;
+                serializeJson(dj, Serial);
+                Serial.println();
+            }
+            else if (strcmp(action, "set") == 0) {
+                int idx = doc["index"] | -1;
+                uint32_t val = doc["value"] | 0;
+                if (idx >=0 && idx < 6) {
+                    adf2_regs[idx] = val;
+                    StaticJsonDocument<192> dj;
+                    dj["status"] = "ok";
+                    dj["cmd"] = "adf2";
+                    dj["index"] = idx;
+                    dj["value"] = val;
+                    serializeJson(dj, Serial);
+                    Serial.println();
+                }
+            }
+        } else if (strcmp(cmd, "dac") == 0) {
+            int val = doc["value"] | -1;
+            if (val >= DAC_MIN && val <= DAC_MAX) {
+                disc.setDACValue((uint16_t)val);
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "dac";
+                dj["value"] = val;
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else {
+                sendJsonMessage("error", "DAC value out of range");
+            }
+        } else if (strcmp(cmd, "adf_persist") == 0) {
+            const char* action = doc["action"];
+            if (!action) {
+                sendJsonMessage("error", "adf_persist requires action");
+                return;
+            }
+
+            if (strcmp(action, "status") == 0) {
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "adf_persist";
+                dj["action"] = "status";
+                dj["pending_mask"] = adfPersistDirtyMask();
+                dj["adf1_pending"] = adf1PersistDirty;
+                dj["adf2_pending"] = adf2PersistDirty;
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else if (strcmp(action, "commit") == 0) {
+                bool committed = commitStagedADFRegsToEEPROM();
+
+                StaticJsonDocument<192> done;
+                done["status"] = committed ? "ok" : "error";
+                done["cmd"] = "adf_persist";
+                done["action"] = "commit";
+                done["committed"] = committed;
+                done["pending_mask"] = adfPersistDirtyMask();
+                serializeJson(done, Serial);
+                Serial.println();
+            } else {
+                sendJsonMessage("error", "adf_persist action must be status|commit");
+            }
+        } else if (strcmp(cmd, "help") == 0) {
+            sendJsonMessage("info", "JSON commands: {\"cmd\":\"adf1\",\"action\":\"show\"}, {\"cmd\":\"dac\",\"value\":2048}");
+        } else if (strcmp(cmd, "info") == 0) {
+            StaticJsonDocument<384> dj;
+            dj["status"] = "ok";
+            dj["cmd"] = "info";
+            dj["version"] = FW_VERSION;
+            dj["board"] = "RP2350";
+            dj["have_dac"] = static_cast<int>(haveDAC);
+            dj["have_adf1"] = static_cast<int>(haveADF1);
+            dj["have_adf2"] = static_cast<int>(haveADF2);
+            bool want_regs = doc["regs"] | false;
+            if (want_regs) {
+                JsonArray a1 = dj.createNestedArray("adf1_regs");
+                for (int i = 0; i < 6; ++i) a1.add(adf1_regs[i]);
+                JsonArray a2 = dj.createNestedArray("adf2_regs");
+                for (int i = 0; i < 6; ++i) a2.add(adf2_regs[i]);
+            }
+            serializeJson(dj, Serial);
+            Serial.println();
+        }
+        return;
+    }
+    // tokens
+    int sp1 = s.indexOf(' ');
+    String cmd = (sp1 == -1) ? s : s.substring(0, sp1);
+    String rest = (sp1 == -1) ? String("") : s.substring(sp1 + 1);
+
+    if (cmd == "adf1") {
+        int sp2 = rest.indexOf(' ');
+        String sub = (sp2 == -1) ? rest : rest.substring(0, sp2);
+        String args = (sp2 == -1) ? String("") : rest.substring(sp2 + 1);
+        if (sub == "show") { printADFRegs("ADF1", adf1_regs); }
+        else if (sub == "save") { saveADFRegs(adf1_regs, ADF1_EEPROM_ADDR); }
+        else if (sub == "load") {
+            loadADFRegs(adf1_regs, ADF1_REGS, ADF1_EEPROM_ADDR);
+            if (haveADF1 == PeripheralStatus::PS_OK) adf1.program(adf1_regs);
+            else sendJsonMessage("info", "adf1_unavailable_skip_program");
+        }
+        else if (sub == "program") {
+            bool programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1);
+            sendJsonKV("ok", "programmed", programmed ? 1 : 0);
+        }
+        else if (sub == "default") { for (int i=0;i<6;i++) adf1_regs[i]=ADF1_REGS[i]; }
+        else if (sub == "set") {
+            int sp = args.indexOf(' ');
+            if (sp == -1) { sendJsonMessage("error", "usage: adf1 set <0-5> <hex>"); }
+            else {
+                int idx = args.substring(0, sp).toInt();
+                String v = args.substring(sp+1);
+                uint32_t val = (uint32_t) strtoul(v.c_str(), nullptr, 16);
+                if (idx >=0 && idx < 6) {
+                    adf1_regs[idx] = val;
+                    StaticJsonDocument<192> dj;
+                    dj["status"] = "ok";
+                    dj["cmd"] = "adf1";
+                    dj["index"] = idx;
+                    dj["value"] = val;
+                    serializeJson(dj, Serial);
+                    Serial.println();
+                } else sendJsonMessage("error", "index out of range");
+            }
+        }
+    } else if (cmd == "adf2") {
+        int sp2 = rest.indexOf(' ');
+        String sub = (sp2 == -1) ? rest : rest.substring(0, sp2);
+        String args = (sp2 == -1) ? String("") : rest.substring(sp2 + 1);
+        if (sub == "show") { printADFRegs("ADF2", adf2_regs); }
+        else if (sub == "save") { saveADFRegs(adf2_regs, ADF2_EEPROM_ADDR); }
+        else if (sub == "load") {
+            loadADFRegs(adf2_regs, ADF2_REGS, ADF2_EEPROM_ADDR);
+            if (haveADF2 == PeripheralStatus::PS_OK) adf2.program(adf2_regs);
+            else sendJsonMessage("info", "adf2_unavailable_skip_program");
+        }
+        else if (sub == "program") {
+            bool programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2);
+            sendJsonKV("ok", "programmed", programmed ? 1 : 0);
+        }
+        else if (sub == "default") { for (int i=0;i<6;i++) adf2_regs[i]=ADF2_REGS[i]; }
+        else if (sub == "set") {
+            int sp = args.indexOf(' ');
+            if (sp == -1) { sendJsonMessage("error", "usage: adf2 set <0-5> <hex>"); }
+            else {
+                int idx = args.substring(0, sp).toInt();
+                String v = args.substring(sp+1);
+                uint32_t val = (uint32_t) strtoul(v.c_str(), nullptr, 16);
+                if (idx >=0 && idx < 6) {
+                    adf2_regs[idx] = val;
+                    StaticJsonDocument<192> dj;
+                    dj["status"] = "ok";
+                    dj["cmd"] = "adf2";
+                    dj["index"] = idx;
+                    dj["value"] = val;
+                    serializeJson(dj, Serial);
+                    Serial.println();
+                } else sendJsonMessage("error", "index out of range");
+            }
+        }
+    } else if (cmd == "info") {
+        StaticJsonDocument<256> dj;
+        dj["status"] = "ok";
+        dj["cmd"] = "info";
+        dj["version"] = FW_VERSION;
+        dj["board"] = "RP2350";
+        serializeJson(dj, Serial);
+        Serial.println();
+    } else if (cmd == "help") {
+        StaticJsonDocument<256> dj;
+        dj["status"] = "info";
+        dj["help"] = "adf1 show|save|load|program|default|set <i> <hex>; adf2 show|save|load|program|default|set <i> <hex>";
+        serializeJson(dj, Serial);
+        Serial.println();
+    } else {
+        sendJsonMessage("error", "Unknown command. Type 'help'.");
+    }
+}
+
+// ============================================================
+// Object instantiation
+// ============================================================
+
+ADF4351 adf1(ADF1_CLK_PIN, ADF1_MOSI_PIN, ADF1_LE_PIN,
+             ADF1_CE_PIN,  ADF1_LD_PIN);
+
+ADF4351 adf2(ADF2_CLK_PIN, ADF2_MOSI_PIN, ADF2_LE_PIN,
+             ADF2_CE_PIN,  ADF2_LD_PIN);
+
+MCP4725         dac(MCP4725_ADDR);
+GPSParser       gps(Serial1);
+Discipliner     disc(dac);
+StatusManager   status(disc, gps, adf1, adf2);
+PIOTimingEngine timing(GPS_1PPS_PIN, FREQ_COUNT_PIN);
+
+// ============================================================
+// Core 1 - PIO timing engine only
+// IRQ handlers are registered in timing.begin() and fire
+// automatically. Core1 just needs to stay alive.
+// ============================================================
+
+void setup1() {
+    // Required for safe flash writes from core0 using multicore_lockout_*.
+    multicore_lockout_victim_init();
+
+#if DISABLE_CORE1_TIMING_ENGINE
+    sendJsonMessage("info", "core1_timing_disabled");
+#else
+    uint32_t actual = clock_get_hz(clk_sys);
+    timing.begin();
+    timing.setSysclkHz(actual);
+    timing.setOCXOFreq(10000000);
+#endif
+}
+
+void loop1() {
+    // All PIO work is interrupt-driven on this core.
+    // tight_loop_contents() hints to the compiler/CPU
+    // not to optimise this away.
+    tight_loop_contents();
+}
+
+// ============================================================
+// Core 0
+// ============================================================
+
+void setup() {
+    // 150MHz = fully validated RP2350 speed, no overclocking needed.
+    // At 150MHz, PIO timestamp resolution = 6.67ns.
+    // GPS 1PPS accuracy (~20ns RMS) dominates anyway.
+    set_sys_clock_khz(150000, true);
+
+    Serial.begin(115200);
+    delay(5000);
+    // Print the banner multiple times so a late-opening serial monitor is
+    // more likely to capture at least one of the messages.
+
+    {
+        StaticJsonDocument<192> dj;
+        dj["status"] = "info";
+        dj["event"] = "firmware_boot";
+        dj["version"] = FW_VERSION;
+        dj["board"] = "RP2350";
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+
+    // I2C for MCP4725 DAC - avoid forcing SDA/SCL pins to prevent accidental
+    // alternate-function assignment that can interfere with other peripherals.
+    // Use default TwoWire pin assignments provided by the core.
+    Wire.begin();
+
+    delay(50);
+    // Detect DAC presence via I2C ACK
+    Wire.beginTransmission(MCP4725_ADDR);
+    if (Wire.endTransmission() != 0) {
+        haveDAC = PeripheralStatus::PS_ABSENT;
+        sendJsonMessage("warning", "mcp4725_not_detected");
+        disc.setDACEnabled(false);
+        // Immediate steady alarm for missing critical hardware
+        status.setAlarmSteady(true);
+    } else {
+        haveDAC = PeripheralStatus::PS_OK;
+        disc.setDACEnabled(true);
+    }
+
+    // GPS UART
+    Serial1.setTX(GPS_TX_PIN);
+    Serial1.setRX(GPS_RX_PIN);
+    gps.begin(GPS_BAUD);
+
+    if (haveDAC == PeripheralStatus::PS_OK) {
+        dac.begin();
+    }
+    disc.begin();
+    status.begin();
+
+    // EEPROM emulation must be initialized before put/get and committed after writes.
+    // Reserve a small region sufficient for DAC + ADF blocks.
+    EEPROM.begin(1024);
+
+#if ADF_PERSIST_EEPROM
+    adfFsReady = LittleFS.begin();
+    {
+        StaticJsonDocument<192> dj;
+        dj["status"] = adfFsReady ? "info" : "error";
+        dj["event"] = "adf_persist_fs";
+        dj["ready"] = adfFsReady;
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+#else
+    adfFsReady = false;
+#endif
+
+    // Initialise mutable ADF regs from EEPROM or defaults
+    loadADFRegs(adf1_regs, ADF1_REGS, ADF1_EEPROM_ADDR);
+    loadADFRegs(adf2_regs, ADF2_REGS, ADF2_EEPROM_ADDR);
+
+    // Initialise and program both ADF4351s
+    const bool adf1Installed = (ADF1_INSTALLED != 0);
+    const bool adf2Installed = (ADF2_INSTALLED != 0);
+
+    if (adf1Installed) {
+        adf1.begin();
+    } else {
+        haveADF1 = PeripheralStatus::PS_ABSENT;
+        sendJsonMessage("info", "adf1_not_installed_skip_init");
+    }
+
+    if (adf2Installed) {
+        adf2.begin();
+    } else {
+        haveADF2 = PeripheralStatus::PS_ABSENT;
+        sendJsonMessage("info", "adf2_not_installed_skip_init");
+    }
+
+    if (adf1Installed) {
+        adf1.program(adf1_regs);
+        adf1_attempts = 1;
+        delay(100);
+        {
+            StaticJsonDocument<192> dj;
+            dj["event"] = "adf_lock";
+            dj["adf"] = "adf1";
+            dj["locked"] = adf1.isLocked();
+            serializeJson(dj, Serial);
+            Serial.println();
+        }
+    }
+
+    if (adf2Installed) {
+        adf2.program(adf2_regs);
+        adf2_attempts = 1;
+        delay(100);
+        {
+            StaticJsonDocument<192> dj;
+            dj["event"] = "adf_lock";
+            dj["adf"] = "adf2";
+            dj["locked"] = adf2.isLocked();
+            serializeJson(dj, Serial);
+            Serial.println();
+        }
+    }
+
+    // Allow some time for the ADF VCOs to lock after programming.
+    // Wait up to this timeout, polling lock status periodically.
+    const uint32_t ADF_LOCK_WAIT_MS = 5000;
+    const uint32_t ADF_LOCK_POLL_MS = 200;
+    uint32_t startMs = millis();
+    bool a1_locked = !adf1Installed;
+    bool a2_locked = !adf2Installed;
+    while ((millis() - startMs) < ADF_LOCK_WAIT_MS) {
+        if (adf1Installed) a1_locked = adf1.isLocked();
+        if (adf2Installed) a2_locked = adf2.isLocked();
+        if (a1_locked && a2_locked) break;
+        delay(ADF_LOCK_POLL_MS);
+    }
+    {
+        StaticJsonDocument<192> dj;
+        dj["event"] = "init_adf_locks";
+        dj["adf1_locked"] = a1_locked;
+        dj["adf2_locked"] = a2_locked;
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
+
+    if (adf1Installed) haveADF1 = a1_locked ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
+    if (adf2Installed) haveADF2 = a2_locked ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
+
+    // If any critical subsystem failed to initialize after the grace period,
+    // assert the alarm LED so the operator can see an issue.
+    bool initFailed = false;
+    if (adf1Installed && !a1_locked) {
+        sendJsonMessage("error", "adf1_failed_to_lock_during_init");
+        initFailed = true;
+    }
+    if (adf2Installed && !a2_locked) {
+        sendJsonMessage("error", "adf2_failed_to_lock_during_init");
+        initFailed = true;
+    }
+    if (initFailed) {
+        status.setAlarmSteady(true);
+    }
+}
+
+void loop() {
+    // CLI input first (FIFO buffered, non-blocking) so command handling stays
+    // responsive even if other subsystems are degraded.
+    pollSerialIntoCLIQueue();
+    String nextCmd;
+    if (dequeueCLICommand(nextCmd)) {
+        handleCLI(nextCmd);
+    }
+
+    // Handle staged EEPROM commit outside command handlers.
+    serviceADFEEPROMCommit();
+
+    // Parse incoming GPS NMEA sentences
+    gps.update();
+
+    // Collect PIO timing result (Core1 populates this via IRQ)
+    TimingResult tr = timing.getResult();
+    const GPSState& gs = gps.state();
+
+    bool gpsGood = gs.hasFix && gs.ppsValid;
+
+    // Feed phase error to disciplining PI loop
+    if (tr.ppsValid) {
+        disc.update((int32_t)tr.phaseError_ns, gpsGood);
+    } else if (!gpsGood) {
+        disc.update(0, false);
+    }
+
+    // Log OCXO frequency measurement every 10 seconds
+    if (tr.freqValid) {
+        static uint32_t lastFreqLog = 0;
+        if (millis() - lastFreqLog >= 10000) {
+            lastFreqLog = millis();
+            StaticJsonDocument<192> dj;
+            dj["event"] = "ocxo";
+            dj["measured_hz"] = tr.measuredFreq_Hz;
+            dj["freq_error_ppb"] = tr.freqError_ppb;
+            serializeJson(dj, Serial);
+            Serial.println();
+        }
+    }
+
+    // LEDs, alarm, periodic debug print
+    status.update();
+
+    // heartbeat removed — use presence of JSON status messages instead
+
+    // Reprogram ADF4351 if lock is lost
+    static uint32_t lastLockCheck = 0;
+    if (millis() - lastLockCheck >= 1000) {
+        lastLockCheck = millis();
+        if ((ADF1_INSTALLED != 0) && !adf1.isLocked()) {
+            if (haveADF1 == PeripheralStatus::PS_OK && adf1_attempts < MAX_ADF_ATTEMPTS) {
+                sendJsonMessage("warning", "adf1_lock_lost_reprogramming_attempt");
+                adf1.program(adf1_regs);
+                adf1_attempts++;
+            } else if (haveADF1 == PeripheralStatus::PS_OK && adf1_attempts >= MAX_ADF_ATTEMPTS) {
+                sendJsonMessage("warning", "adf1_unresponsive_disabling_reprogram");
+                haveADF1 = PeripheralStatus::PS_ABSENT;
+            }
+        } else {
+            // reset attempts on successful lock
+            adf1_attempts = 1;
+        }
+        if ((ADF2_INSTALLED != 0) && !adf2.isLocked()) {
+            if (haveADF2 == PeripheralStatus::PS_OK && adf2_attempts < MAX_ADF_ATTEMPTS) {
+                sendJsonMessage("warning", "adf2_lock_lost_reprogramming_attempt");
+                adf2.program(adf2_regs);
+                adf2_attempts++;
+            } else if (haveADF2 == PeripheralStatus::PS_OK && adf2_attempts >= MAX_ADF_ATTEMPTS) {
+                sendJsonMessage("warning", "adf2_unresponsive_disabling_reprogram");
+                haveADF2 = PeripheralStatus::PS_ABSENT;
+            }
+        } else {
+            adf2_attempts = 1;
+        }
+    }
+
+    delay(10);
+
+}

@@ -1,0 +1,97 @@
+; ============================================================
+; 1PPS Edge Timestamper
+; ============================================================
+; Waits for a rising edge on the input pin.
+; At the moment of the edge, reads the 32-bit hardware timer
+; (TIMERAWL) and pushes it to the RX FIFO.
+;
+; System clock: 200 MHz → 5 ns resolution
+;
+; The RP2350 timer peripheral (TIMERAWL) runs at 1 MHz (1us
+; ticks). For sub-microsecond resolution we instead count
+; system clock cycles using the state machine's own clock,
+; which gives us 5ns resolution at 200MHz.
+;
+; Approach: use a 32-bit counter in ISR that increments each
+; cycle. On edge, push the counter value. Core1 computes the
+; delta between successive pushes.
+; ============================================================
+
+.program pps_capture
+.wrap_target
+    wait 0 pin 0        ; wait for pin to go low (idle)
+    wait 1 pin 0        ; wait for rising edge - THIS is the timestamp moment
+    in   null, 32       ; push zero as sentinel — actual timestamp
+                        ; comes from the 32-bit timer read in C
+                        ; (PIO cannot directly read TIMERAWL)
+    push noblock        ; push to FIFO, don't stall if full
+.wrap
+
+; ============================================================
+; High-resolution version using scratch registers as counter
+; This counts PIO clock cycles since last edge
+; giving true hardware-level timestamp
+; ============================================================
+
+.program pps_capture_hires
+    set x, 0            ; clear counter
+.wrap_target
+    ; Count cycles while waiting for pin to go low
+wait_low:
+    jmp x--, check_low  ; decrement x (wraps, doesn't matter)
+check_low:
+    jmp pin wait_low    ; if pin still high, keep counting
+
+    ; Count cycles while waiting for rising edge
+wait_high:
+    jmp x--, check_high
+check_high:
+    jmp pin, got_edge   ; rising edge detected
+    jmp wait_high
+
+got_edge:
+    ; x now contains (0xFFFFFFFF - cycles_since_last_edge)
+    ; Push to FIFO - Core1 reads and computes delta
+    in x, 32
+    push noblock
+    set x, 0
+.wrap
+
+; ============================================================
+; OCXO Frequency Counter (Reciprocal method)
+; ============================================================
+; Counts system clock cycles between successive rising edges
+; of the 10MHz OCXO input (on pin 1 of this state machine).
+; 
+; At 200MHz sysclk, 10MHz input → ~20 cycles per period.
+; We measure over many cycles for better resolution.
+; 
+; Pushes cycle count to RX FIFO every N input edges.
+; Core1 computes: f = (N * sysclk) / cycle_count
+; ============================================================
+
+.program freq_counter
+    set y, 9            ; measure over 10 edges (1us at 10MHz)
+.wrap_target
+    ; Wait for rising edge
+    wait 0 pin 1        ; wait for low
+    wait 1 pin 1        ; wait for high = start counting
+
+    ; Inner loop: count cycles until next N edges
+    mov x, ~null        ; x = 0xFFFFFFFF (max count, counts down)
+
+count_loop:
+    jmp y--, next_edge  ; decrement edge counter
+    jmp push_result     ; all edges counted
+
+next_edge:
+    wait 0 pin 1        ; wait for next falling edge
+    wait 1 pin 1        ; wait for next rising edge
+    jmp x--, count_loop ; decrement cycle counter, loop
+
+push_result:
+    ; x = 0xFFFFFFFF - elapsed_cycles
+    in x, 32
+    push noblock
+    set y, 9            ; reset edge counter
+.wrap
