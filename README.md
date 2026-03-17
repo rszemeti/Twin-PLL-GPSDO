@@ -14,6 +14,21 @@ This README is for users who want to **flash**, **run**, and **use** the project
 - **Live status** (GPS fix/lock, satellites, DOP, alarm, lock states)
 - **Dark-themed monitor UI** with Main/Details/About tabs
 
+## RF/output notes (important)
+- **Two outputs are fully independent**: each PLL output has its own register set and can be tuned separately.
+- **Frequency range**: any frequency within the ADF4351 synthesizer output range is supported in software (approximately **34.375 MHz to 4.4 GHz**).
+	- Practical usable range depends on your board layout, output network, filtering, and measurement method.
+- **Resolution / step size**:
+	- In **Integer-N**, tuning is quantized by $f_{PFD}/\text{OUTDIV}$.
+	- With default settings (10 MHz ref, R=5, so $f_{PFD}=2$ MHz), Integer-N step is $2\text{ MHz}/\text{OUTDIV}$ (for example, 62.5 kHz at OUTDIV=32).
+	- In **Fractional-N**, finer step sizes are possible (GUI default channel spacing is 1 Hz), but with fractional spurs/tradeoffs.
+- **Phase-noise tradeoff**:
+	- **Integer-N** is generally preferred for best close-in noise / cleaner spectrum when an exact frequency is possible.
+	- **Fractional-N** gives finer frequency placement when exact Integer-N is not available, but may increase spur content.
+- **Intended use guidance**:
+	- Phase noise is typically **good enough for injection-locking crystal multipliers**.
+	- It may **not** be good enough for all **direct multiplication** chains, depending on your multiplier stages and phase-noise budget.
+
 ## Repository layout
 - `firmware/` – PlatformIO project for Pico 2
 - `monitor/` – Python GUI monitor/config app
