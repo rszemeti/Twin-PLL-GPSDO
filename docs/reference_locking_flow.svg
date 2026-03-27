@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" role="img" aria-labelledby="title desc">
+  <title id="title">Reference locking flow</title>
+  <desc id="desc">Signal flow for GPS 1PPS disciplining of the 10 MHz OCXO using frequency-error averaging, integral DAC correction, EEPROM DAC restore, and lock detection based on error smoothing and DAC settling.</desc>
+  <defs>
+    <style>
+      .bg { fill: #0f1115; }
+      .panel { fill: #141820; stroke: #2a2f38; stroke-width: 2; rx: 12; ry: 12; }
+      .accent { fill: #1a1f28; stroke: #3a4658; stroke-width: 2; rx: 12; ry: 12; }
+      .text { fill: #e6e8eb; font-family: Segoe UI, Arial, sans-serif; font-size: 20px; font-weight: 600; }
+      .sub { fill: #aeb7c2; font-family: Segoe UI, Arial, sans-serif; font-size: 16px; }
+      .arrow { stroke: #79c0ff; stroke-width: 3; fill: none; marker-end: url(#arrowhead); }
+      .arrow2 { stroke: #ffd60a; stroke-width: 3; fill: none; marker-end: url(#arrowhead2); }
+      .caption { fill: #7d8590; font-family: Segoe UI, Arial, sans-serif; font-size: 14px; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#79c0ff" />
+    </marker>
+    <marker id="arrowhead2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ffd60a" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="560" />
+
+  <rect class="panel" x="40" y="70" width="170" height="90" />
+  <text class="text" x="125" y="106" text-anchor="middle">GPS 1PPS</text>
+  <text class="sub" x="125" y="132" text-anchor="middle">reference edge</text>
+
+  <rect class="panel" x="40" y="240" width="170" height="90" />
+  <text class="text" x="125" y="276" text-anchor="middle">10 MHz OCXO</text>
+  <text class="sub" x="125" y="302" text-anchor="middle">disciplined source</text>
+
+  <rect class="panel" x="280" y="70" width="220" height="100" />
+  <text class="text" x="390" y="106" text-anchor="middle">PIO PPS capture ISR</text>
+  <text class="sub" x="390" y="132" text-anchor="middle">timestamps PPS</text>
+  <text class="sub" x="390" y="154" text-anchor="middle">samples edge counter</text>
+
+  <rect class="panel" x="280" y="240" width="220" height="100" />
+  <text class="text" x="390" y="276" text-anchor="middle">PIO edge counter</text>
+  <text class="sub" x="390" y="302" text-anchor="middle">counts 10 MHz pulses</text>
+  <text class="sub" x="390" y="324" text-anchor="middle">between PPS boundaries</text>
+
+  <rect class="panel" x="570" y="145" width="250" height="120" />
+  <text class="text" x="695" y="181" text-anchor="middle">Per-second observables</text>
+  <text class="sub" x="695" y="208" text-anchor="middle">pulse_count</text>
+  <text class="sub" x="695" y="232" text-anchor="middle">measured_hz</text>
+  <text class="sub" x="695" y="256" text-anchor="middle">freq_error_ppb</text>
+
+  <rect class="panel" x="900" y="145" width="250" height="120" />
+  <text class="text" x="1025" y="181" text-anchor="middle">Averaging window</text>
+  <text class="sub" x="1025" y="208" text-anchor="middle">mean(freq_error_ppb)</text>
+  <text class="sub" x="1025" y="232" text-anchor="middle">over DISC_AVERAGE_SECS</text>
+
+  <rect class="accent" x="900" y="340" width="250" height="120" />
+  <text class="text" x="1025" y="376" text-anchor="middle">Lock detector</text>
+  <text class="sub" x="1025" y="403" text-anchor="middle">EMA(error) + hysteresis</text>
+  <text class="sub" x="1025" y="427" text-anchor="middle">DAC settled timer</text>
+
+  <rect class="panel" x="1170" y="145" width="70" height="120" />
+  <text class="text" x="1205" y="190" text-anchor="middle">INT</text>
+  <text class="sub" x="1205" y="214" text-anchor="middle">DAC -=</text>
+  <text class="sub" x="1205" y="236" text-anchor="middle">i_gain *</text>
+  <text class="sub" x="1205" y="258" text-anchor="middle">avg_error</text>
+
+  <rect class="panel" x="1170" y="340" width="70" height="120" />
+  <text class="text" x="1205" y="388" text-anchor="middle">State</text>
+  <text class="sub" x="1205" y="414" text-anchor="middle">ACQ</text>
+  <text class="sub" x="1205" y="436" text-anchor="middle">LOCK</text>
+
+  <rect class="panel" x="1040" y="495" width="200" height="45" />
+  <text class="sub" x="1140" y="523" text-anchor="middle">EEPROM saved DAC value on restart</text>
+
+  <line class="arrow" x1="210" y1="115" x2="280" y2="115" />
+  <line class="arrow" x1="210" y1="285" x2="280" y2="285" />
+  <line class="arrow" x1="500" y1="115" x2="570" y2="185" />
+  <line class="arrow" x1="500" y1="285" x2="570" y2="225" />
+  <line class="arrow" x1="820" y1="205" x2="900" y2="205" />
+  <line class="arrow" x1="1150" y1="205" x2="1170" y2="205" />
+  <line class="arrow2" x1="1205" y1="265" x2="1205" y2="320" />
+  <line class="arrow2" x1="1170" y1="400" x2="1060" y2="400" />
+  <line class="arrow2" x1="900" y1="400" x2="820" y2="235" />
+  <line class="arrow2" x1="1140" y1="495" x2="1205" y2="460" />
+  <line class="arrow2" x1="1205" y1="340" x2="1205" y2="265" />
+  <line class="arrow2" x1="1170" y1="250" x2="210" y2="285" />
+
+  <text class="caption" x="40" y="40">Current firmware behavior: averaged frequency-error control, integral DAC correction, EEPROM DAC restore, and lock assertion gated by error smoothing and DAC settling.</text>
+</svg>
