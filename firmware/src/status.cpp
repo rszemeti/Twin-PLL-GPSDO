@@ -9,7 +9,7 @@ StatusManager::StatusManager(Discipliner &disc, GPSParser &gps,
         _alarmActiveSteady(false), _alarmActiveFlash(false), _alarmFlashOn(false), _lastAlarmFlashMs(0),
         _satsBlinkOn(false), _lastSatsBlinkMs(0),
                 _adf1BlinkOn(false), _adf2BlinkOn(false), _lastAdfBlinkMs(0), _discAvgWindowSecs(DISC_AVERAGE_SECS),
-                _statusIntervalMs(5000) {}
+                                _statusIntervalMs(5000), _measuredFreqHz(0.0), _measuredFreqErrorPpb(0.0) {}
 
 void StatusManager::begin() {
     pinMode(LED_GPS_LOCK,    OUTPUT);
@@ -226,6 +226,8 @@ void StatusManager::printDebug() {
     doc["status_interval_ms"] = _statusIntervalMs;
     doc["dac_value"] = _disc.dacValue();
     doc["freq_ppb"] = _disc.frequency();
+    doc["measured_freq_hz"] = _measuredFreqHz;
+    doc["measured_freq_error_ppb"] = _measuredFreqErrorPpb;
     doc["adf1_locked"] = _adf1.isLocked();
     doc["adf2_locked"] = _adf2.isLocked();
     doc["alarm_steady"] = _alarmActiveSteady;
@@ -254,6 +256,10 @@ void StatusManager::printDebug() {
     Serial.println(" ns");
     Serial.print("DAC value: ");   Serial.println(_disc.dacValue());
     Serial.print("Freq offset: "); Serial.print(_disc.frequency(), 3);
+    Serial.println(" ppb");
+    Serial.print("Measured OCXO: "); Serial.print(_measuredFreqHz, 6);
+    Serial.println(" Hz");
+    Serial.print("Measured freq error: "); Serial.print(_measuredFreqErrorPpb, 3);
     Serial.println(" ppb");
 
     Serial.print("ADF1 (104MHz) locked: ");

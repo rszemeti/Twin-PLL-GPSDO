@@ -132,7 +132,11 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
 void Discipliner::applyDAC(uint16_t val) {
     _dacValue = val;
     if (_dacEnabled) {
+#if USE_PWM_DAC
+        analogWrite(PWM_DAC_PIN, val);
+#else
         _dac.setVoltage(val);
+#endif
     }
 }
 

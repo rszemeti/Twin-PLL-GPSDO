@@ -11,6 +11,9 @@
 #include <EEPROM.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <math.h>
+#include "hardware/gpio.h"
+#include "hardware/pwm.h"
 #include "pico/multicore.h"
 
 // Firmware version
@@ -49,6 +52,48 @@ static void sendTrace(const char* cmd, const char* step) {
     (void)cmd;
     (void)step;
 #endif
+}
+
+static void emitFreqPinDiagnostic() {
+    const uint32_t sampleCount = 20000;
+    uint32_t highCount = 0;
+    uint32_t lowCount = 0;
+    uint32_t transitions = 0;
+
+    bool prev = gpio_get(FREQ_COUNT_PIN);
+    for (uint32_t i = 0; i < sampleCount; ++i) {
+        bool level = gpio_get(FREQ_COUNT_PIN);
+        if (level) {
+            highCount++;
+        } else {
+            lowCount++;
+        }
+        if (level != prev) {
+            transitions++;
+            prev = level;
+        }
+    }
+
+    const uint gpioFunc = gpio_get_function(FREQ_COUNT_PIN);
+    const uint slice = pwm_gpio_to_slice_num(FREQ_COUNT_PIN);
+    const uint chan = pwm_gpio_to_channel(FREQ_COUNT_PIN);
+    const uint16_t pwmCtr = pwm_get_counter(slice);
+
+    StaticJsonDocument<320> dj;
+    dj["event"] = "freq_pin_diag";
+    dj["pin"] = FREQ_COUNT_PIN;
+    dj["gpio_func"] = gpioFunc;
+    dj["pwm_slice"] = slice;
+    dj["pwm_chan"] = chan;
+    dj["pwm_counter"] = pwmCtr;
+    dj["samples"] = sampleCount;
+    dj["high_samples"] = highCount;
+    dj["low_samples"] = lowCount;
+    dj["transitions"] = transitions;
+    dj["saw_high"] = (highCount > 0);
+    dj["saw_low"] = (lowCount > 0);
+    serializeJson(dj, Serial);
+    Serial.println();
 }
 
 // Mutable ADF register arrays (initialised from config defaults)
@@ -1033,6 +1078,15 @@ void setup() {
         Serial.println();
     }
 
+#if USE_PWM_DAC
+    // PWM DAC mode: no I2C needed.  Set 12-bit resolution so the 0-4095
+    // range matches the MCP4725 scale, then drive the pin to centre.
+    analogWriteResolution(12);
+    analogWrite(PWM_DAC_PIN, DAC_CENTRE);
+    haveDAC = PeripheralStatus::PS_OK;
+    disc.setDACEnabled(true);
+    sendJsonMessage("info", "pwm_dac_mode");
+#else
     // I2C for MCP4725 DAC - avoid forcing SDA/SCL pins to prevent accidental
     // alternate-function assignment that can interfere with other peripherals.
     // Use default TwoWire pin assignments provided by the core.
@@ -1051,15 +1105,18 @@ void setup() {
         haveDAC = PeripheralStatus::PS_OK;
         disc.setDACEnabled(true);
     }
+#endif
 
     // GPS UART
     Serial1.setTX(GPS_TX_PIN);
     Serial1.setRX(GPS_RX_PIN);
     gps.begin(GPS_BAUD);
 
+#if !USE_PWM_DAC
     if (haveDAC == PeripheralStatus::PS_OK) {
         dac.begin();
     }
+#endif
     disc.begin();
     status.begin();
 
@@ -1194,22 +1251,25 @@ void loop() {
 
     bool gpsGood = gs.hasFix && gs.ppsValid;
 
-    // Feed averaged phase error to disciplining PI loop
-    static int64_t phaseAccumNs = 0;
-    static uint32_t phaseAccumCount = 0;
-    if (tr.ppsValid) {
-        phaseAccumNs += tr.phaseError_ns;
-        phaseAccumCount++;
+    // The valid observable on this hardware path is the PPS-gated 10 MHz
+    // frequency error. Integrate the per-second ppb error over the averaging
+    // window to obtain an effective phase-drift term in ns for the PI loop.
+    static double controlErrorAccumNs = 0.0;
+    static uint32_t controlErrorCount = 0;
+    if (tr.freqValid) {
+        status.setMeasuredOCXO(tr.measuredFreq_Hz, tr.freqError_ppb);
+        controlErrorAccumNs += tr.freqError_ppb;
+        controlErrorCount++;
 
-        if (phaseAccumCount >= g_discAverageSecs) {
-            int32_t averagedPhaseNs = (int32_t)(phaseAccumNs / (int64_t)phaseAccumCount);
-            disc.update(averagedPhaseNs, gpsGood);
-            phaseAccumNs = 0;
-            phaseAccumCount = 0;
+        if (controlErrorCount >= g_discAverageSecs) {
+            int32_t effectivePhaseNs = (int32_t)lround(controlErrorAccumNs);
+            disc.update(effectivePhaseNs, gpsGood);
+            controlErrorAccumNs = 0.0;
+            controlErrorCount = 0;
         }
     } else if (!gpsGood) {
-        phaseAccumNs = 0;
-        phaseAccumCount = 0;
+        controlErrorAccumNs = 0.0;
+        controlErrorCount = 0;
         disc.update(0, false);
     }
 
@@ -1226,6 +1286,15 @@ void loop() {
             serializeJson(dj, Serial);
             Serial.println();
         }
+    }
+
+    // If the 10 MHz input is not being counted, sample the raw GPIO level.
+    // This helps distinguish a firmware counting bug from a marginal logic-low
+    // threshold issue on the incoming waveform.
+    static uint32_t lastFreqPinDiag = 0;
+    if (millis() - lastFreqPinDiag >= 5000) {
+        lastFreqPinDiag = millis();
+        emitFreqPinDiagnostic();
     }
 
     // LEDs, alarm, periodic debug print

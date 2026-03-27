@@ -3,6 +3,7 @@ import json
 import threading
 import time
 import re
+from collections import deque
 from queue import Queue, Empty
 
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
@@ -12,11 +13,84 @@ from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
                                QSpinBox, QCheckBox, QMessageBox, QTabWidget,
                                QFileDialog)
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
+from PySide6.QtGui import QColor, QPainter, QPen
 import serial
 import serial.tools.list_ports
 
 from adf4351_registers import ADF4351RegisterCalculator, ADF4351Config
 from monitor_version import VERSION as GUI_VERSION
+
+
+DAC_MAX_CODE = 4095
+DAC_FULL_SCALE_VOLTS = 3.3
+
+
+class DACHistoryWidget(QWidget):
+    def __init__(self, parent=None, max_samples=180):
+        super().__init__(parent)
+        self.samples = deque(maxlen=max_samples)
+        self.setMinimumHeight(140)
+
+    def add_sample(self, dac_code):
+        try:
+            value = max(0, min(DAC_MAX_CODE, int(dac_code)))
+        except Exception:
+            return
+        self.samples.append(value)
+        self.update()
+
+    def clear(self):
+        self.samples.clear()
+        self.update()
+
+    def paintEvent(self, event):
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        painter.fillRect(rect, QColor('#10151d'))
+        painter.setPen(QPen(QColor('#2a2f38'), 1))
+        painter.drawRoundedRect(rect, 8, 8)
+
+        if rect.width() <= 24 or rect.height() <= 24:
+            return
+
+        plot = rect.adjusted(10, 10, -10, -10)
+        grid_pen = QPen(QColor('#243040'), 1)
+        grid_pen.setStyle(Qt.DashLine)
+        painter.setPen(grid_pen)
+        for frac in (0.25, 0.5, 0.75):
+            y = plot.top() + int(plot.height() * frac)
+            painter.drawLine(plot.left(), y, plot.right(), y)
+
+        label_pen = QPen(QColor('#7d8590'), 1)
+        painter.setPen(label_pen)
+        painter.drawText(plot.left(), plot.top() + 12, '3.30 V')
+        painter.drawText(plot.left(), plot.bottom() - 4, '0.00 V')
+
+        if len(self.samples) < 2:
+            painter.setPen(QColor('#7d8590'))
+            painter.drawText(plot, Qt.AlignCenter, 'Waiting for DAC telemetry')
+            return
+
+        points = []
+        span = max(1, len(self.samples) - 1)
+        for index, sample in enumerate(self.samples):
+            x = plot.left() + int((plot.width() * index) / span)
+            y_ratio = sample / DAC_MAX_CODE
+            y = plot.bottom() - int(plot.height() * y_ratio)
+            points.append((x, y))
+
+        trace_pen = QPen(QColor('#79c0ff'), 2)
+        painter.setPen(trace_pen)
+        for idx in range(1, len(points)):
+            painter.drawLine(points[idx - 1][0], points[idx - 1][1], points[idx][0], points[idx][1])
+
+        latest_x, latest_y = points[-1]
+        painter.setBrush(QColor('#ffd60a'))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(latest_x - 3, latest_y - 3, 6, 6)
 
 
 class PLLConfigDialog(QDialog):
@@ -440,6 +514,7 @@ class MainWindow(QWidget):
         self.last_device_updated_popup_ts = 0.0
         self.last_disc_updated_popup_ts = 0.0
         self.status_interval_ms = 5000
+        self.latest_dac_code = None
         self.step_dialog = None
         self.step_test_active = False
         self.step_test_restore = None
@@ -486,6 +561,9 @@ class MainWindow(QWidget):
         self.led_timer.timeout.connect(self._tick_leds)
         self.led_timer.start(500)
 
+    def _dac_code_to_voltage(self, dac_code):
+        return (float(dac_code) / DAC_MAX_CODE) * DAC_FULL_SCALE_VOLTS
+
     def _build_ui(self):
         top_layout = QHBoxLayout()
 
@@ -521,6 +599,8 @@ class MainWindow(QWidget):
         self.disc_avg_window = QLabel('')
         self.disc_avg_phase = QLabel('')
         self.dac_value = QLabel('')
+        self.measured_freq_hz = QLabel('')
+        self.measured_freq_error_ppb = QLabel('')
         self.adf1_locked = QLabel('')
         self.adf2_locked = QLabel('')
         self.adf1_freq = QLabel('')
@@ -542,12 +622,14 @@ class MainWindow(QWidget):
         grid.addWidget(QLabel('Disc avg window (s)'), 10, 0); grid.addWidget(self.disc_avg_window, 10, 1)
         grid.addWidget(QLabel('Disc avg phase (ns)'), 11, 0); grid.addWidget(self.disc_avg_phase, 11, 1)
         grid.addWidget(QLabel('DAC Value'), 12, 0); grid.addWidget(self.dac_value, 12, 1)
-        grid.addWidget(QLabel('adf1_locked'), 13, 0); grid.addWidget(self.adf1_locked, 13, 1)
-        grid.addWidget(QLabel('adf2_locked'), 14, 0); grid.addWidget(self.adf2_locked, 14, 1)
-        grid.addWidget(QLabel('adf1 decoded'), 15, 0); grid.addWidget(self.adf1_freq, 15, 1)
-        grid.addWidget(QLabel('adf2 decoded'), 16, 0); grid.addWidget(self.adf2_freq, 16, 1)
-        grid.addWidget(QLabel('Disc P gain'), 17, 0); grid.addWidget(self.disc_p_gain, 17, 1)
-        grid.addWidget(QLabel('Disc I gain'), 18, 0); grid.addWidget(self.disc_i_gain, 18, 1)
+        grid.addWidget(QLabel('Measured freq (Hz)'), 13, 0); grid.addWidget(self.measured_freq_hz, 13, 1)
+        grid.addWidget(QLabel('Measured freq error (ppb)'), 14, 0); grid.addWidget(self.measured_freq_error_ppb, 14, 1)
+        grid.addWidget(QLabel('adf1_locked'), 15, 0); grid.addWidget(self.adf1_locked, 15, 1)
+        grid.addWidget(QLabel('adf2_locked'), 16, 0); grid.addWidget(self.adf2_locked, 16, 1)
+        grid.addWidget(QLabel('adf1 decoded'), 17, 0); grid.addWidget(self.adf1_freq, 17, 1)
+        grid.addWidget(QLabel('adf2 decoded'), 18, 0); grid.addWidget(self.adf2_freq, 18, 1)
+        grid.addWidget(QLabel('Disc P gain'), 19, 0); grid.addWidget(self.disc_p_gain, 19, 1)
+        grid.addWidget(QLabel('Disc I gain'), 20, 0); grid.addWidget(self.disc_i_gain, 20, 1)
 
         status_box.setLayout(grid)
 
@@ -681,6 +763,29 @@ class MainWindow(QWidget):
         front_status_layout.addWidget(self.sats_used_main)
         front_status_layout.addStretch(1)
 
+        dac_box = QGroupBox('DAC Correction')
+        dac_layout = QVBoxLayout(dac_box)
+        dac_readout_row = QHBoxLayout()
+        dac_readout_row.addWidget(QLabel('Approx. correction'))
+        dac_readout_row.addStretch(1)
+        self.dac_voltage_main = QLabel('-')
+        self.dac_voltage_main.setStyleSheet('font-size: 22px; font-weight: 700; color: #ffd60a;')
+        dac_readout_row.addWidget(self.dac_voltage_main)
+        dac_layout.addLayout(dac_readout_row)
+
+        dac_detail_row = QHBoxLayout()
+        self.dac_code_main = QLabel('Code: -')
+        self.dac_code_main.setStyleSheet('color: #aeb7c2;')
+        dac_detail_row.addWidget(self.dac_code_main)
+        dac_detail_row.addStretch(1)
+        self.dac_percent_main = QLabel('Full scale: -')
+        self.dac_percent_main.setStyleSheet('color: #aeb7c2;')
+        dac_detail_row.addWidget(self.dac_percent_main)
+        dac_layout.addLayout(dac_detail_row)
+
+        self.dac_history = DACHistoryWidget()
+        dac_layout.addWidget(self.dac_history)
+
         # ADF regs area
         self.adf1_regs_text = QTextEdit(); self.adf1_regs_text.setReadOnly(True)
         self.adf2_regs_text = QTextEdit(); self.adf2_regs_text.setReadOnly(True)
@@ -708,6 +813,7 @@ class MainWindow(QWidget):
         main_layout = QVBoxLayout(main_tab)
         main_layout.addWidget(leds_box)
         main_layout.addWidget(front_status_box)
+        main_layout.addWidget(dac_box)
         main_layout.addLayout(pll_row)
         main_layout.addStretch(1)
 
@@ -843,6 +949,21 @@ class MainWindow(QWidget):
             }
         ''')
 
+    def _update_dac_display(self, dac_code):
+        try:
+            code = max(0, min(DAC_MAX_CODE, int(dac_code)))
+        except Exception:
+            return
+
+        volts = self._dac_code_to_voltage(code)
+        pct = (100.0 * code) / DAC_MAX_CODE
+        self.latest_dac_code = code
+        self.dac_value.setText(str(code))
+        self.dac_voltage_main.setText(f'{volts:.3f} V')
+        self.dac_code_main.setText(f'Code: {code}')
+        self.dac_percent_main.setText(f'Full scale: {pct:.1f}%')
+        self.dac_history.add_sample(code)
+
     def _add_led_widget(self, grid, row, col, key, label_text):
         dot = QLabel('●')
         dot.setAlignment(Qt.AlignCenter)
@@ -969,6 +1090,12 @@ class MainWindow(QWidget):
             except Exception:
                 pass
             self.serial = None
+        self.latest_dac_code = None
+        self.dac_value.setText('')
+        self.dac_voltage_main.setText('-')
+        self.dac_code_main.setText('Code: -')
+        self.dac_percent_main.setText('Full scale: -')
+        self.dac_history.clear()
         self.connect_btn.setText('Connect')
         self.log_text.append('Disconnected')
 
@@ -1290,6 +1417,10 @@ class MainWindow(QWidget):
                 self.disc_avg_window.setText(str(obj.get('disc_avg_window_s')))
             if 'disc_avg_phase_ns' in obj:
                 self.disc_avg_phase.setText(str(obj.get('disc_avg_phase_ns')))
+            if 'measured_freq_hz' in obj:
+                self.measured_freq_hz.setText(f"{float(obj.get('measured_freq_hz')):.6f}")
+            if 'measured_freq_error_ppb' in obj:
+                self.measured_freq_error_ppb.setText(f"{float(obj.get('measured_freq_error_ppb')):.3f}")
             if 'disc_p_gain' in obj:
                 p_gain = float(obj.get('disc_p_gain'))
                 self.disc_p_gain.setText(f'{p_gain:.6f}')
@@ -1301,7 +1432,7 @@ class MainWindow(QWidget):
 
             self._handle_step_sample(obj)
             if 'dac_value' in obj:
-                self.dac_value.setText(str(obj.get('dac_value')))
+                self._update_dac_display(obj.get('dac_value'))
             if 'adf1_locked' in obj:
                 adf1_locked = self._to_bool(obj.get('adf1_locked'))
                 self.status_state['adf1_locked'] = adf1_locked

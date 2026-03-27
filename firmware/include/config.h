@@ -42,6 +42,14 @@
 #define I2C_SCL_PIN     15
 #define MCP4725_ADDR    0x60  // A0 tied low
 
+// --- PWM DAC option (bypass MCP4725 for quick bench test) ---
+// Set USE_PWM_DAC to 1 to use RP2040/RP2350 PWM output as an EFC DAC.
+// Requires an external RC low-pass filter on PWM_DAC_PIN to smooth to DC.
+// Uses 12-bit analogWrite so range and limits match MCP4725 (0-4095).
+// Set to 0 to use the I2C MCP4725 DAC (normal operation).
+#define USE_PWM_DAC     1
+#define PWM_DAC_PIN     26
+
 // --- Status LEDs ---
 #define LED_GPS_LOCK    16
 #define LED_DISCIPLINED 17
