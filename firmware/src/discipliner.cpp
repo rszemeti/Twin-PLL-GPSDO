@@ -12,12 +12,14 @@ Discipliner::Discipliner(MCP4725 &dac)
       _freqOffset_ppb(0.0f),
     _pGain(DISC_P_GAIN),
     _iGain(DISC_I_GAIN),
+      _calActive(false),
       _warmupCount(0),
-      _lockSecs(0),
+      _lockMs(0),
+      _lockEnteredMs(0),
       _holdoverSecs(0),
       _lastGPSsec(0),
             _everHadGPS(false), _lastSavedMs(0), _lastSavedValue(DAC_CENTRE),
-            _dacEnabled(true) {}
+            _dacEnabled(true), _lockErrEMA(0.0f) {}
 
 void Discipliner::begin() {
     // Load saved "unlocked" DAC value from EEPROM if present
@@ -29,12 +31,36 @@ void Discipliner::begin() {
     } else {
         _dacValue = DAC_CENTRE;
     }
+    _integral = (float)_dacValue;
     _lastSavedValue = _dacValue;
     _lastSavedMs = millis();
     applyDAC(_dacValue);
 }
 
+void Discipliner::tickWarmup(bool gpsValid) {
+    if (gpsValid) {
+        _lastGPSsec  = millis() / 1000;
+        _everHadGPS  = true;
+        _holdoverSecs = 0;
+    }
+    if (_state == DiscState::FREERUN) {
+        if (gpsValid) _state = DiscState::WARMUP;
+        return;
+    }
+    if (_state == DiscState::WARMUP) {
+        if (!_everHadGPS) { _state = DiscState::FREERUN; return; }
+        if (!gpsValid) return;
+        _warmupCount++;
+        if (_warmupCount >= DISC_WARMUP_SECS) {
+            _state = DiscState::ACQUIRING;
+            // Preserve the restored/current DAC operating point across restart.
+            _integral = (float)_dacValue;
+        }
+    }
+}
+
 void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
+    if (_calActive) return;  // loop suspended during cal
 
     if (gpsValid) {
         _lastGPSsec  = millis() / 1000;
@@ -48,21 +74,10 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
     switch (_state) {
 
         case DiscState::FREERUN:
-            if (gpsValid) _state = DiscState::WARMUP;
-            return;
+            return;   // tickWarmup() handles FREERUN→WARMUP
 
         case DiscState::WARMUP:
-            if (!_everHadGPS) {
-                _state = DiscState::FREERUN;
-                return;
-            }
-            if (!gpsValid) return;
-            _warmupCount++;
-            if (_warmupCount >= DISC_WARMUP_SECS) {
-                _state = DiscState::ACQUIRING;
-                _integral = DAC_CENTRE;
-            }
-            return;
+            return;   // tickWarmup() handles warmup countdown;
 
         case DiscState::ACQUIRING:
         case DiscState::LOCKED:
@@ -80,52 +95,63 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
             return;
     }
 
-    // PI controller
-    // Phase error in ns → frequency correction in DAC counts
-    // Positive error = OCXO fast → reduce EFC voltage → reduce DAC
     _lastError = phaseError_ns;
+    int32_t absErr = abs(phaseError_ns);
 
-    float p = _pGain * (float)phaseError_ns;
-    _integral += _iGain * (float)phaseError_ns;
+    // Update EMA of absolute error for lock detection — smooths GPS/counter noise
+    _lockErrEMA = DISC_LOCK_EMA_ALPHA * (float)absErr
+                  + (1.0f - DISC_LOCK_EMA_ALPHA) * _lockErrEMA;
+
+    // Reduce gain when locked to narrow bandwidth and reduce jitter
+    float effectiveI = (_state == DiscState::LOCKED)
+                       ? _iGain * DISC_I_GAIN_LOCKED_RATIO
+                       : _iGain;
+
+    // Negative feedback: positive error (OCXO fast) must reduce DAC/integral
+    _integral -= effectiveI * (float)phaseError_ns;
 
     // Clamp integral
     if (_integral > DAC_MAX) _integral = DAC_MAX;
     if (_integral < DAC_MIN) _integral = DAC_MIN;
 
-    float correction = _integral - p;
-    if (correction > DAC_MAX) correction = DAC_MAX;
-    if (correction < DAC_MIN) correction = DAC_MIN;
+    _dacValue = (uint16_t)_integral;
 
-    _dacValue = (uint16_t)correction;
-
-    // Frequency offset estimate in ppb
-    // Assumes DAC_CENTRE = 0ppb, full range = OCXO EFC range
-    // Adjust scaling to match your specific OCXO EFC sensitivity
     _freqOffset_ppb = ((float)_dacValue - DAC_CENTRE) * 0.1f;
 
-    // Lock detection
-    if (abs(phaseError_ns) < DISC_LOCK_THRESHOLD_NS) {
-        _lockSecs++;
-        if (_state == DiscState::ACQUIRING && _lockSecs > 10)
-            _state = DiscState::LOCKED;
-    } else {
-        _lockSecs = 0;
-        if (_state == DiscState::LOCKED)
+    // Lock detection — use smoothed EMA error plus hysteresis so occasional
+    // noisy windows do not prevent lock or cause rapid lock/unlock chatter.
+    uint32_t now = millis();
+    if (_state == DiscState::LOCKED) {
+        if (_lockErrEMA > DISC_LOCK_EXIT_THRESHOLD_NS) {
+            _lockMs = 0;
+            _lockEnteredMs = 0;
             _state = DiscState::ACQUIRING;
+        } else if (_lockEnteredMs != 0) {
+            _lockMs = now - _lockEnteredMs;
+        }
+    } else {
+        if (_lockErrEMA < DISC_LOCK_ENTER_THRESHOLD_NS) {
+            if (_lockEnteredMs == 0) _lockEnteredMs = now;
+            _lockMs = now - _lockEnteredMs;
+            if (_state == DiscState::ACQUIRING && _lockMs >= DISC_LOCK_MIN_MS)
+                _state = DiscState::LOCKED;
+        } else {
+            _lockMs = 0;
+            _lockEnteredMs = 0;
+        }
     }
 
     applyDAC(_dacValue);
 
     // Occasionally save DAC as "unlocked" reference when it changes
-    uint32_t now = millis();
+    uint32_t saveNow = millis();
     uint32_t interval_ms = (uint32_t)DAC_SAVE_INTERVAL_SECS * 1000UL;
-    // Save only if the DAC changed by more than the hysteresis threshold
-    // and the configured interval has elapsed.
     if ((uint16_t)abs((int)_dacValue - (int)_lastSavedValue) >= DAC_SAVE_HYSTERESIS
-        && (now - _lastSavedMs) >= interval_ms) {
+        && (saveNow - _lastSavedMs) >= interval_ms) {
         EEPROM.put(DAC_EEPROM_ADDR, _dacValue);
+        EEPROM.commit();
         _lastSavedValue = _dacValue;
-        _lastSavedMs = now;
+        _lastSavedMs = saveNow;
     }
 }
 
@@ -141,6 +167,8 @@ void Discipliner::applyDAC(uint16_t val) {
 }
 
 void Discipliner::setDACValue(uint16_t val) {
+    _dacValue = val;
+    _integral = (float)val;
     applyDAC(val);
 }
 

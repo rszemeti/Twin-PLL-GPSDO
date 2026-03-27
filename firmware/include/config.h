@@ -114,12 +114,14 @@ static const uint32_t ADF2_REGS[6] = {
 // ============================================================
 
 // PI loop time constants (in 1PPS ticks = seconds)
-#define DISC_P_GAIN         0.001f   // proportional gain
-#define DISC_I_GAIN         0.0001f  // integral gain
-#define DISC_P_GAIN_MIN     0.000001f
-#define DISC_P_GAIN_MAX     0.05f
-#define DISC_I_GAIN_MIN     0.0000001f
-#define DISC_I_GAIN_MAX     0.01f
+#define DISC_P_GAIN         0.0f     // P not used — pure integrator
+#define DISC_I_GAIN         0.2f     // pull-in gain (acquiring)
+// When LOCKED, i_gain is multiplied by this to reduce loop bandwidth
+#define DISC_I_GAIN_LOCKED_RATIO  0.25f  // 0.2 -> 0.05 when locked
+#define DISC_P_GAIN_MIN     0.0f
+#define DISC_P_GAIN_MAX     10.0f
+#define DISC_I_GAIN_MIN     0.0f
+#define DISC_I_GAIN_MAX     10.0f
 
 // DAC limits (12-bit MCP4725, 0-4095)
 // Set to keep OCXO EFC within safe range
@@ -128,10 +130,16 @@ static const uint32_t ADF2_REGS[6] = {
 #define DAC_CENTRE          2048     // nominal centre voltage
 
 // How many 1PPS edges to average before first correction
-#define DISC_WARMUP_SECS    30
+#define DISC_WARMUP_SECS    0   // 0 = skip warmup (testing); set to e.g. 240 for normal use
 
-// Phase error threshold to declare "disciplined" (nanoseconds)
-#define DISC_LOCK_THRESHOLD_NS  100
+// Lock detection uses an EMA of the averaged correction error.
+// Enter with a reasonably tight threshold, but require a much larger
+// excursion to drop back out so single noisy windows do not clear lock.
+#define DISC_LOCK_ENTER_THRESHOLD_NS  300
+#define DISC_LOCK_EXIT_THRESHOLD_NS   700
+#define DISC_LOCK_MIN_MS              20000
+// EMA alpha for lock detection smoothing (1/N, N~10 update() calls)
+#define DISC_LOCK_EMA_ALPHA           0.1f
 
 // GPS lock required before disciplining starts
 #define GPS_FIX_REQUIRED    true

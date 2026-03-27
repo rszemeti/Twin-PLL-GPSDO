@@ -75,19 +75,18 @@ private:
     bool initPPSsm();
     bool initFreqCounter();
 public:
-    // Called from IRQ handlers on Core1 - made public so IRQ C functions
-    // can call into the instance without being friends.
-    void processPPS(uint32_t cycleCount);
-    void processFreq(uint32_t rawCount);
-    void onPwmWrapIrq();
+    // Called from the PPS IRQ handler on Core1.
+    void processPPS(uint32_t ts_us);
 
 private:
-    // Frequency pulse counting via PWM edge counter on _freqPin.
-    uint     _freqSlice;
-    uint16_t _lastFreqCounter;
-    uint32_t _lastFreqWraps;
-    volatile uint32_t _freqWrapCount;
-    bool     _firstFreqWindow;
+    // Frequency measurement via PIO edge counter (SM1).
+    // x counts DOWN from 0xFFFFFFFF on every rising edge of the OCXO input.
+    // At each 1PPS edge the CPU snapshots x via exec-injection.
+    // delta = x_prev - x_now = edges counted in that second (~10,000,000).
+    // error_Hz = delta - _ocxoHz;  error_ppb = error_Hz * (1e9 / _ocxoHz)
+    uint     _freqSMOffset;  // offset of edge_counter program in PIO memory
+    uint32_t _prevEdgeX;     // x value at previous PPS snapshot
+    bool     _freqSeeded;    // true once we have a valid first snapshot
 };
 
 // Global instance accessible from both cores

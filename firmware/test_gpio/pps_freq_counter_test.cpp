@@ -19,6 +19,13 @@
 #define PPS_PIN 2         // GPIO2, 1PPS input
 #define LED_PIN 25        // LED
 
+static void waitForUsbSerial(uint32_t timeout_ms) {
+    const uint32_t start_ms = millis();
+    while (!Serial && (millis() - start_ms) < timeout_ms) {
+        delay(10);
+    }
+}
+
 // PWM edge counter state
 static volatile uint32_t freq_wrap_count = 0;   // Wrap-around counter
 static volatile uint16_t last_pwm_counter = 0;  // Last captured PWM counter value
@@ -73,9 +80,12 @@ void gpio_pps_handler(uint gpio, uint32_t events) {
 
 void setup() {
     Serial.begin(115200);
-    delay(500);
-    
-    Serial.println("\n{\"test\": \"pps_freq_counter\"}");
+    waitForUsbSerial(5000);
+    delay(250);
+
+    Serial.println();
+    Serial.println("{\"test\": \"pps_freq_counter\", \"event\": \"boot\"}");
+    Serial.println("{\"event\": \"usb_ready\"}");
     
     // Initialize LED
     pinMode(LED_PIN, OUTPUT);
@@ -111,6 +121,8 @@ void setup() {
 }
 
 void loop() {
+    static uint32_t last_heartbeat_ms = 0;
+
     if (measurement_ready) {
         noInterrupts();
         const uint32_t sample_pps = pps_count;
@@ -118,7 +130,13 @@ void loop() {
         measurement_ready = false;
         interrupts();
 
-        printf("{\"pps\": %lu, \"counts\": %lu}\n", sample_pps, sample_counts);
+        Serial.printf("{\"pps\": %lu, \"counts\": %lu}\n", sample_pps, sample_counts);
+    }
+
+    const uint32_t now_ms = millis();
+    if ((now_ms - last_heartbeat_ms) >= 1000) {
+        last_heartbeat_ms = now_ms;
+        Serial.printf("{\"event\": \"heartbeat\", \"pps_seen\": %lu}\n", pps_count);
     }
 
     delay(100);

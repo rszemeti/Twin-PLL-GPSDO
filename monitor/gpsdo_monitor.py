@@ -490,9 +490,9 @@ class Signals(QObject):
 
 class MainWindow(QWidget):
     DISC_PRESETS = {
-        'slow': {'avg_window_s': 20, 'p_gain': 0.0005, 'i_gain': 0.00003},
-        'normal': {'avg_window_s': 8, 'p_gain': 0.0010, 'i_gain': 0.00010},
-        'fast': {'avg_window_s': 4, 'p_gain': 0.0025, 'i_gain': 0.00020},
+        'slow':   {'avg_window_s': 8, 'p_gain': 0.0, 'i_gain': 0.02},
+        'normal': {'avg_window_s': 8, 'p_gain': 0.0, 'i_gain': 0.05},
+        'fast':   {'avg_window_s': 8, 'p_gain': 0.0, 'i_gain': 0.20},
     }
 
     def __init__(self):
@@ -538,6 +538,7 @@ class MainWindow(QWidget):
             'p_gain': None,
             'i_gain': None,
         }
+        self._freq_hz_samples = deque()
         self.status_state = {
             'gps_fix': False,
             'gps_pps': False,
@@ -600,6 +601,7 @@ class MainWindow(QWidget):
         self.disc_avg_phase = QLabel('')
         self.dac_value = QLabel('')
         self.measured_freq_hz = QLabel('')
+        self.measured_freq_raw_hz = QLabel('')
         self.measured_freq_error_ppb = QLabel('')
         self.adf1_locked = QLabel('')
         self.adf2_locked = QLabel('')
@@ -622,14 +624,15 @@ class MainWindow(QWidget):
         grid.addWidget(QLabel('Disc avg window (s)'), 10, 0); grid.addWidget(self.disc_avg_window, 10, 1)
         grid.addWidget(QLabel('Disc avg phase (ns)'), 11, 0); grid.addWidget(self.disc_avg_phase, 11, 1)
         grid.addWidget(QLabel('DAC Value'), 12, 0); grid.addWidget(self.dac_value, 12, 1)
-        grid.addWidget(QLabel('Measured freq (Hz)'), 13, 0); grid.addWidget(self.measured_freq_hz, 13, 1)
-        grid.addWidget(QLabel('Measured freq error (ppb)'), 14, 0); grid.addWidget(self.measured_freq_error_ppb, 14, 1)
-        grid.addWidget(QLabel('adf1_locked'), 15, 0); grid.addWidget(self.adf1_locked, 15, 1)
-        grid.addWidget(QLabel('adf2_locked'), 16, 0); grid.addWidget(self.adf2_locked, 16, 1)
-        grid.addWidget(QLabel('adf1 decoded'), 17, 0); grid.addWidget(self.adf1_freq, 17, 1)
-        grid.addWidget(QLabel('adf2 decoded'), 18, 0); grid.addWidget(self.adf2_freq, 18, 1)
-        grid.addWidget(QLabel('Disc P gain'), 19, 0); grid.addWidget(self.disc_p_gain, 19, 1)
-        grid.addWidget(QLabel('Disc I gain'), 20, 0); grid.addWidget(self.disc_i_gain, 20, 1)
+        grid.addWidget(QLabel('Measured freq (10 s avg)'), 13, 0); grid.addWidget(self.measured_freq_hz, 13, 1)
+        grid.addWidget(QLabel('Measured freq (1 s raw)'), 14, 0); grid.addWidget(self.measured_freq_raw_hz, 14, 1)
+        grid.addWidget(QLabel('Measured freq error (ppb)'), 15, 0); grid.addWidget(self.measured_freq_error_ppb, 15, 1)
+        grid.addWidget(QLabel('adf1_locked'), 16, 0); grid.addWidget(self.adf1_locked, 16, 1)
+        grid.addWidget(QLabel('adf2_locked'), 17, 0); grid.addWidget(self.adf2_locked, 17, 1)
+        grid.addWidget(QLabel('adf1 decoded'), 18, 0); grid.addWidget(self.adf1_freq, 18, 1)
+        grid.addWidget(QLabel('adf2 decoded'), 19, 0); grid.addWidget(self.adf2_freq, 19, 1)
+        grid.addWidget(QLabel('Disc P gain'), 20, 0); grid.addWidget(self.disc_p_gain, 20, 1)
+        grid.addWidget(QLabel('Disc I gain'), 21, 0); grid.addWidget(self.disc_i_gain, 21, 1)
 
         status_box.setLayout(grid)
 
@@ -642,16 +645,16 @@ class MainWindow(QWidget):
         self.disc_avg_input.setSuffix(' s')
 
         self.disc_p_input = QDoubleSpinBox()
-        self.disc_p_input.setDecimals(6)
-        self.disc_p_input.setRange(0.000001, 0.05)
-        self.disc_p_input.setSingleStep(0.0001)
-        self.disc_p_input.setValue(0.001)
+        self.disc_p_input.setDecimals(4)
+        self.disc_p_input.setRange(0.0, 10.0)
+        self.disc_p_input.setSingleStep(0.01)
+        self.disc_p_input.setValue(0.0)
 
         self.disc_i_input = QDoubleSpinBox()
-        self.disc_i_input.setDecimals(7)
-        self.disc_i_input.setRange(0.0000001, 0.01)
-        self.disc_i_input.setSingleStep(0.00001)
-        self.disc_i_input.setValue(0.0001)
+        self.disc_i_input.setDecimals(4)
+        self.disc_i_input.setRange(0.0, 10.0)
+        self.disc_i_input.setSingleStep(0.01)
+        self.disc_i_input.setValue(0.05)
 
         disc_ctrl_form.addRow('Average window', self.disc_avg_input)
         disc_ctrl_form.addRow('P gain', self.disc_p_input)
@@ -783,6 +786,14 @@ class MainWindow(QWidget):
         dac_detail_row.addWidget(self.dac_percent_main)
         dac_layout.addLayout(dac_detail_row)
 
+        avg_freq_row = QHBoxLayout()
+        avg_freq_row.addWidget(QLabel('Avg freq (10 s):'))
+        avg_freq_row.addStretch(1)
+        self.avg_freq_label = QLabel('-')
+        self.avg_freq_label.setStyleSheet('font-size: 18px; font-weight: 700; color: #79c0ff;')
+        avg_freq_row.addWidget(self.avg_freq_label)
+        dac_layout.addLayout(avg_freq_row)
+
         self.dac_history = DACHistoryWidget()
         dac_layout.addWidget(self.dac_history)
 
@@ -813,7 +824,6 @@ class MainWindow(QWidget):
         main_layout = QVBoxLayout(main_tab)
         main_layout.addWidget(leds_box)
         main_layout.addWidget(front_status_box)
-        main_layout.addWidget(dac_box)
         main_layout.addLayout(pll_row)
         main_layout.addStretch(1)
 
@@ -836,6 +846,7 @@ class MainWindow(QWidget):
         # Advanced tab (controls and tooling)
         advanced_tab = QWidget()
         advanced_layout = QVBoxLayout(advanced_tab)
+        advanced_layout.addWidget(dac_box)
         advanced_layout.addLayout(disc_ctrl_row)
         advanced_layout.addLayout(send_layout)
         advanced_layout.addStretch(1)
@@ -888,6 +899,7 @@ class MainWindow(QWidget):
         about_layout.addStretch(1)
 
         tabs = QTabWidget()
+        tabs.setDocumentMode(True)
         tabs.addTab(main_tab, 'Main')
         tabs.addTab(details_tab, 'Details')
         tabs.addTab(advanced_tab, 'Advanced')
@@ -919,6 +931,36 @@ class MainWindow(QWidget):
                 left: 10px;
                 padding: 0 4px;
                 color: #aeb7c2;
+            }
+            QTabWidget::pane {
+                border: 1px solid #2a2f38;
+                border-radius: 8px;
+                top: -1px;
+                background-color: #141820;
+            }
+            QTabBar {
+                background: transparent;
+            }
+            QTabBar::tab {
+                background-color: #1a1f28;
+                color: #aeb7c2;
+                border: 1px solid #2a2f38;
+                border-bottom: none;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                padding: 8px 14px;
+                margin-right: 4px;
+                min-width: 84px;
+                font-weight: 600;
+            }
+            QTabBar::tab:selected {
+                background-color: #141820;
+                color: #e6e8eb;
+                border-color: #3a4658;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #242b36;
+                color: #edf0f3;
             }
             QLabel {
                 background: transparent;
@@ -985,6 +1027,23 @@ class MainWindow(QWidget):
         if not dot:
             return
         dot.setStyleSheet(f"color: {color if on else '#3a3a3a'}; font-size: 20px;")
+
+    def _update_avg_freq(self, freq_hz):
+        now = time.monotonic()
+        self._freq_hz_samples.append((now, float(freq_hz)))
+
+        cutoff = now - 10.0
+        while self._freq_hz_samples and self._freq_hz_samples[0][0] < cutoff:
+            self._freq_hz_samples.popleft()
+
+        if not self._freq_hz_samples:
+            self.measured_freq_hz.setText('')
+            self.avg_freq_label.setText('-')
+            return
+
+        avg = sum(sample for _, sample in self._freq_hz_samples) / len(self._freq_hz_samples)
+        self.measured_freq_hz.setText(f'{avg:.1f}')
+        self.avg_freq_label.setText(f"{avg:.1f} Hz")
 
     def _to_bool(self, value):
         if isinstance(value, bool):
@@ -1092,10 +1151,14 @@ class MainWindow(QWidget):
             self.serial = None
         self.latest_dac_code = None
         self.dac_value.setText('')
+        self.measured_freq_hz.setText('')
+        self.measured_freq_raw_hz.setText('')
         self.dac_voltage_main.setText('-')
         self.dac_code_main.setText('Code: -')
         self.dac_percent_main.setText('Full scale: -')
         self.dac_history.clear()
+        self._freq_hz_samples.clear()
+        self.avg_freq_label.setText('-')
         self.connect_btn.setText('Connect')
         self.log_text.append('Disconnected')
 
@@ -1240,7 +1303,7 @@ class MainWindow(QWidget):
         self.disc_i_input.setValue(float(preset['i_gain']))
         self.log_text.append(
             f"Applying preset '{preset_name}': avg={preset['avg_window_s']}s, "
-            f"P={preset['p_gain']:.6f}, I={preset['i_gain']:.7f}"
+            f"P={preset['p_gain']:.4f}, I={preset['i_gain']:.4f}"
         )
         self.apply_disc_ctrl()
 
@@ -1259,14 +1322,14 @@ class MainWindow(QWidget):
         if p_gain is not None:
             p_f = float(p_gain)
             self.disc_ctrl_last['p_gain'] = p_f
-            self.disc_p_gain.setText(f'{p_f:.6f}')
+            self.disc_p_gain.setText(f'{p_f:.4f}')
             if not self.disc_p_input.hasFocus():
                 self.disc_p_input.setValue(p_f)
 
         if i_gain is not None:
             i_f = float(i_gain)
             self.disc_ctrl_last['i_gain'] = i_f
-            self.disc_i_gain.setText(f'{i_f:.7f}')
+            self.disc_i_gain.setText(f'{i_f:.4f}')
             if not self.disc_i_input.hasFocus():
                 self.disc_i_input.setValue(i_f)
 
@@ -1418,7 +1481,10 @@ class MainWindow(QWidget):
             if 'disc_avg_phase_ns' in obj:
                 self.disc_avg_phase.setText(str(obj.get('disc_avg_phase_ns')))
             if 'measured_freq_hz' in obj:
-                self.measured_freq_hz.setText(f"{float(obj.get('measured_freq_hz')):.6f}")
+                freq_hz = float(obj.get('measured_freq_hz'))
+                self.measured_freq_raw_hz.setText(f"{freq_hz:.6f}")
+                if freq_hz > 0:
+                    self._update_avg_freq(freq_hz)
             if 'measured_freq_error_ppb' in obj:
                 self.measured_freq_error_ppb.setText(f"{float(obj.get('measured_freq_error_ppb')):.3f}")
             if 'disc_p_gain' in obj:
@@ -1448,17 +1514,8 @@ class MainWindow(QWidget):
 
             self._update_virtual_leds()
 
-            # Log non-periodic JSON events so firmware errors/info are visible.
-            if ('gps_fix' not in obj
-                    and 'gps_pps' not in obj
-                    and 'sats' not in obj
-                    and 'sats_used' not in obj
-                    and 'sats_in_view' not in obj
-                    and 'hdop' not in obj
-                    and 'disc_state' not in obj
-                    and 'phase_error_ns' not in obj
-                    and 'dac_value' not in obj):
-                self.log_text.append(json.dumps(obj))
+            # Log all JSON to the log pane.
+            self.log_text.append(json.dumps(obj))
         except Exception as e:
             self.log_text.append(f'handle_json error: {e}')
 
@@ -1722,6 +1779,7 @@ class MainWindow(QWidget):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setStyle('Fusion')
     w = MainWindow()
     w.show()
     sys.exit(app.exec())

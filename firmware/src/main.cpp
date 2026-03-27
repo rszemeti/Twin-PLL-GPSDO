@@ -54,48 +54,6 @@ static void sendTrace(const char* cmd, const char* step) {
 #endif
 }
 
-static void emitFreqPinDiagnostic() {
-    const uint32_t sampleCount = 20000;
-    uint32_t highCount = 0;
-    uint32_t lowCount = 0;
-    uint32_t transitions = 0;
-
-    bool prev = gpio_get(FREQ_COUNT_PIN);
-    for (uint32_t i = 0; i < sampleCount; ++i) {
-        bool level = gpio_get(FREQ_COUNT_PIN);
-        if (level) {
-            highCount++;
-        } else {
-            lowCount++;
-        }
-        if (level != prev) {
-            transitions++;
-            prev = level;
-        }
-    }
-
-    const uint gpioFunc = gpio_get_function(FREQ_COUNT_PIN);
-    const uint slice = pwm_gpio_to_slice_num(FREQ_COUNT_PIN);
-    const uint chan = pwm_gpio_to_channel(FREQ_COUNT_PIN);
-    const uint16_t pwmCtr = pwm_get_counter(slice);
-
-    StaticJsonDocument<320> dj;
-    dj["event"] = "freq_pin_diag";
-    dj["pin"] = FREQ_COUNT_PIN;
-    dj["gpio_func"] = gpioFunc;
-    dj["pwm_slice"] = slice;
-    dj["pwm_chan"] = chan;
-    dj["pwm_counter"] = pwmCtr;
-    dj["samples"] = sampleCount;
-    dj["high_samples"] = highCount;
-    dj["low_samples"] = lowCount;
-    dj["transitions"] = transitions;
-    dj["saw_high"] = (highCount > 0);
-    dj["saw_low"] = (lowCount > 0);
-    serializeJson(dj, Serial);
-    Serial.println();
-}
-
 // Mutable ADF register arrays (initialised from config defaults)
 static uint32_t adf1_regs[6];
 static uint32_t adf2_regs[6];
@@ -106,6 +64,15 @@ static bool adfFsReady = false;
 static bool adf1PersistDirty = false;
 static bool adf2PersistDirty = false;
 static uint32_t g_discAverageSecs = DISC_AVERAGE_SECS;
+
+// ── EFC calibration state machine ─────────────────────────────────────────
+enum class EFCCalState { IDLE, SETTLE_LOW, READ_LOW, SETTLE_HIGH, READ_HIGH };
+static EFCCalState  g_efcCalState   = EFCCalState::IDLE;
+static uint32_t     g_efcCalTimer   = 0;
+static int32_t      g_efcCalFreqLow = 0;   // ppb at DAC_MIN
+static int32_t      g_efcCalFreqHigh= 0;   // ppb at DAC_MAX
+static const uint32_t EFC_CAL_SETTLE_MS = 15000;
+static uint32_t     g_efcCalSettleMs  = EFC_CAL_SETTLE_MS;  // runtime settle time
 
 // Forward declarations for global instances (defined later in this file)
 extern Discipliner disc;
@@ -730,17 +697,35 @@ static void handleCLI(String s) {
                 }
             }
         } else if (strcmp(cmd, "dac") == 0) {
-            int val = doc["value"] | -1;
-            if (val >= DAC_MIN && val <= DAC_MAX) {
+            // Accept numeric value, named presets, or "resume"
+            int val = -1;
+            bool doResume = false;
+            if (doc["value"].is<int>()) {
+                val = doc["value"].as<int>();
+            } else if (doc["value"].is<const char*>()) {
+                const char* preset = doc["value"].as<const char*>();
+                if      (strcmp(preset, "min")    == 0) val = DAC_MIN;
+                else if (strcmp(preset, "max")    == 0) val = DAC_MAX;
+                else if (strcmp(preset, "centre") == 0 ||
+                         strcmp(preset, "center") == 0) val = DAC_CENTRE;
+                else if (strcmp(preset, "resume") == 0) doResume = true;
+            }
+            if (doResume) {
+                disc.resetIntegral();
+                disc.setCalActive(false);
+                sendJsonMessage("ok", "loop resumed");
+            } else if (val >= DAC_MIN && val <= DAC_MAX) {
+                disc.setCalActive(true);
                 disc.setDACValue((uint16_t)val);
                 StaticJsonDocument<192> dj;
                 dj["status"] = "ok";
                 dj["cmd"] = "dac";
                 dj["value"] = val;
+                dj["note"] = "loop frozen — send {\"cmd\":\"dac\",\"value\":\"resume\"} to restore";
                 serializeJson(dj, Serial);
                 Serial.println();
             } else {
-                sendJsonMessage("error", "DAC value out of range");
+                sendJsonMessage("error", "DAC value out of range (use 100-3995, min/max/centre/resume)");
             }
         } else if (strcmp(cmd, "disc_ctrl") == 0) {
             const char* action = doc["action"] | "get";
@@ -886,8 +871,31 @@ static void handleCLI(String s) {
             } else {
                 sendJsonMessage("error", "adf_persist action must be status|commit");
             }
+        } else if (strcmp(cmd, "efc_cal") == 0) {
+            if (g_efcCalState != EFCCalState::IDLE) {
+                sendJsonMessage("error", "efc_cal already running");
+            } else {
+                uint32_t settleMs = EFC_CAL_SETTLE_MS;
+                if (doc.containsKey("settle_s")) {
+                    int ss = doc["settle_s"].as<int>();
+                    if (ss >= 5 && ss <= 120) settleMs = (uint32_t)ss * 1000;
+                }
+                g_efcCalSettleMs = settleMs;
+                disc.setCalActive(true);
+                disc.setDACValue(DAC_MIN);
+                g_efcCalTimer = millis();
+                g_efcCalState = EFCCalState::SETTLE_LOW;
+                StaticJsonDocument<128> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "efc_cal";
+                dj["msg"] = "started: settling at DAC_MIN";
+                dj["dac_min"] = DAC_MIN;
+                dj["dac_max"] = DAC_MAX;
+                dj["settle_s"] = (int)(settleMs / 1000);
+                serializeJson(dj, Serial); Serial.println();
+            }
         } else if (strcmp(cmd, "help") == 0) {
-            sendJsonMessage("info", "JSON commands: adf1/adf2, dac, adf_persist, disc_ctrl get|set|save|load, status_ctrl get|set");
+            sendJsonMessage("info", "JSON commands: adf1/adf2, dac, adf_persist, disc_ctrl get|set|save|load, status_ctrl get|set, efc_cal");
         } else if (strcmp(cmd, "info") == 0) {
             StaticJsonDocument<384> dj;
             dj["status"] = "ok";
@@ -1040,9 +1048,18 @@ void setup1() {
     sendJsonMessage("info", "core1_timing_disabled");
 #else
     uint32_t actual = clock_get_hz(clk_sys);
-    timing.begin();
+    bool timingOk = timing.begin();
     timing.setSysclkHz(actual);
     timing.setOCXOFreq(10000000);
+    // Emit startup diagnostic so serial monitor shows init result.
+    {
+        StaticJsonDocument<128> dj;
+        dj["status"] = timingOk ? "info" : "error";
+        dj["event"] = "timing_init";
+        dj["ok"] = timingOk;
+        serializeJson(dj, Serial);
+        Serial.println();
+    }
 #endif
 }
 
@@ -1256,16 +1273,88 @@ void loop() {
     // window to obtain an effective phase-drift term in ns for the PI loop.
     static double controlErrorAccumNs = 0.0;
     static uint32_t controlErrorCount = 0;
+
+    // EFC calibration state machine — suspends normal discipliner while running.
+    if (g_efcCalState != EFCCalState::IDLE) {
+        if (tr.freqValid) status.setMeasuredOCXO(tr.measuredFreq_Hz, tr.freqError_ppb);
+        uint32_t elapsed = millis() - g_efcCalTimer;
+        switch (g_efcCalState) {
+            case EFCCalState::SETTLE_LOW:
+                if (elapsed >= g_efcCalSettleMs) {
+                    g_efcCalState = EFCCalState::READ_LOW;
+                    g_efcCalTimer = millis();
+                }
+                break;
+            case EFCCalState::READ_LOW:
+                if (tr.freqValid) {
+                    g_efcCalFreqLow = tr.freqError_ppb;
+                    disc.setDACValue(DAC_MAX);
+                    g_efcCalTimer = millis();
+                    g_efcCalState = EFCCalState::SETTLE_HIGH;
+                    StaticJsonDocument<128> dj2;
+                    dj2["event"] = "efc_cal";
+                    dj2["step"] = "low_read";
+                    dj2["dac"] = DAC_MIN;
+                    dj2["freq_error_ppb"] = g_efcCalFreqLow;
+                    serializeJson(dj2, Serial); Serial.println();
+                }
+                break;
+            case EFCCalState::SETTLE_HIGH:
+                if (elapsed >= g_efcCalSettleMs) {
+                    g_efcCalState = EFCCalState::READ_HIGH;
+                    g_efcCalTimer = millis();
+                }
+                break;
+            case EFCCalState::READ_HIGH:
+                if (tr.freqValid) {
+                    g_efcCalFreqHigh = tr.freqError_ppb;
+                    int32_t swing_ppb = g_efcCalFreqHigh - g_efcCalFreqLow;
+                    int32_t dac_span  = DAC_MAX - DAC_MIN;
+                    float slope = (dac_span > 0) ? (float)swing_ppb / (float)dac_span : 0.0f;
+                    StaticJsonDocument<256> dj3;
+                    dj3["event"] = "efc_cal";
+                    dj3["step"] = "done";
+                    dj3["dac_min"] = DAC_MIN;
+                    dj3["dac_max"] = DAC_MAX;
+                    dj3["freq_at_min_ppb"] = g_efcCalFreqLow;
+                    dj3["freq_at_max_ppb"] = g_efcCalFreqHigh;
+                    dj3["swing_ppb"] = swing_ppb;
+                    dj3["slope_ppb_per_dac"] = slope;
+                    serializeJson(dj3, Serial); Serial.println();
+                    // Restore DAC to centre and re-enter discipliner
+                    disc.setDACValue(DAC_CENTRE);
+                    disc.resetIntegral();
+                    disc.setCalActive(false);
+                    controlErrorAccumNs = 0.0;
+                    controlErrorCount = 0;
+                    g_efcCalState = EFCCalState::IDLE;
+                }
+                break;
+            default: break;
+        }
+        // Skip normal discipliner loop while calibrating
+        goto skip_discipliner;
+    }
+
     if (tr.freqValid) {
         status.setMeasuredOCXO(tr.measuredFreq_Hz, tr.freqError_ppb);
         controlErrorAccumNs += tr.freqError_ppb;
         controlErrorCount++;
 
         if (controlErrorCount >= g_discAverageSecs) {
-            int32_t effectivePhaseNs = (int32_t)lround(controlErrorAccumNs);
+            // Average freq error per second in ppb.
+            // Negative = OCXO slow = discipliner must increase DAC.
+            // discipliner.update() applies negative feedback: _integral -= iGain * error
+            // so a negative error correctly increases the integral.
+            double avgError = controlErrorAccumNs / (double)controlErrorCount;
+            int32_t effectivePhaseNs = (int32_t)lround(avgError);
             disc.update(effectivePhaseNs, gpsGood);
             controlErrorAccumNs = 0.0;
             controlErrorCount = 0;
+        } else {
+            // Tick the state machine every second so warmup counts PPS pulses,
+            // not averaging windows.  Pass 0 correction — no DAC change.
+            disc.tickWarmup(gpsGood);
         }
     } else if (!gpsGood) {
         controlErrorAccumNs = 0.0;
@@ -1273,28 +1362,29 @@ void loop() {
         disc.update(0, false);
     }
 
+    skip_discipliner:
+
     // Log OCXO frequency measurement every 10 seconds
     if (tr.freqValid) {
         static uint32_t lastFreqLog = 0;
         if (millis() - lastFreqLog >= 10000) {
             lastFreqLog = millis();
-            StaticJsonDocument<192> dj;
+            StaticJsonDocument<256> dj;
             dj["event"] = "ocxo";
             dj["pulse_count"] = tr.freqPulseCount;
             dj["measured_hz"] = tr.measuredFreq_Hz;
             dj["freq_error_ppb"] = tr.freqError_ppb;
+            dj["dac_value"] = disc.dacValue();
+            switch (disc.state()) {
+                case DiscState::WARMUP:    dj["disc_state"] = "WARMUP";    break;
+                case DiscState::ACQUIRING: dj["disc_state"] = "ACQUIRING"; break;
+                case DiscState::LOCKED:    dj["disc_state"] = "LOCKED";    break;
+                case DiscState::HOLDOVER:  dj["disc_state"] = "HOLDOVER";  break;
+                case DiscState::FREERUN:   dj["disc_state"] = "FREERUN";   break;
+            }
             serializeJson(dj, Serial);
             Serial.println();
         }
-    }
-
-    // If the 10 MHz input is not being counted, sample the raw GPIO level.
-    // This helps distinguish a firmware counting bug from a marginal logic-low
-    // threshold issue on the incoming waveform.
-    static uint32_t lastFreqPinDiag = 0;
-    if (millis() - lastFreqPinDiag >= 5000) {
-        lastFreqPinDiag = millis();
-        emitFreqPinDiagnostic();
     }
 
     // LEDs, alarm, periodic debug print
