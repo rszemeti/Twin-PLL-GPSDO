@@ -51,13 +51,16 @@ EMA of error + settle timer]
 
 ### 2.1 PPS capture
 
-A PIO state machine watches the GPS 1PPS line. When it sees a rising edge
-it fires `PIO0_IRQ_0`, and the ISR grabs a microsecond timestamp from
-`timer_hw->timerawl`.
+A PIO state machine watches the GPS 1PPS line. When it sees a rising
+edge it fires `PIO0_IRQ_0`, and the ISR triggers the edge-counter
+snapshot (see below). The ISR also grabs a microsecond timestamp from
+`timer_hw->timerawl` — that's only used for the separate phase-error
+telemetry field, not for frequency measurement.
 
-That gives us the PPS interval to 1 µs resolution — good enough for the
-interval term in the frequency calculation, though it is *not* the
-limiting factor for frequency accuracy (the edge count is).
+We trust the GPS 1PPS to *be* one second. GPS 1PPS accuracy is
+typically ±30 ns, which is far better than anything we could measure
+with an on-chip microsecond timer. So the gate interval is simply
+1 second by definition — no division by a measured interval needed.
 
 ### 2.2 Counting 10 MHz edges — the "counter around zero" model
 
@@ -87,17 +90,17 @@ the two views are mathematically identical.
 > and any concern about wrap. The multi-second average is the sum of
 > these per-second residuals divided by the window length.
 
-From the per-second edge count the maths is straightforward:
+From the per-second edge count, the frequency error is simply:
 
 $$
-f_{meas} = \frac{N_{10MHz}}{T_{pps}}
+error_{Hz} = N_{edges} - 10{,}000{,}000
 $$
 
-where $N_{10MHz}$ is the pulse count and $T_{pps}$ is the measured PPS
-interval in seconds. Frequency error in ppb:
+Because the PPS gate *is* one second, the edge count *is* the frequency
+in Hz — no division required. The error in ppb is just that scaled up:
 
 $$
-error_{ppb} = \frac{f_{meas} - f_{nominal}}{f_{nominal}} \cdot 10^9
+error_{ppb} = \frac{error_{Hz}}{10{,}000{,}000} \cdot 10^9 = error_{Hz} \times 100
 $$
 
 ---
@@ -148,14 +151,14 @@ monitor app can show what the loop is doing.
 
 ## 5) Timing resolution
 
-The RP2350 runs at 150 MHz, so one system clock tick is about 6.67 ns.
-The PPS interval timestamp comes from a microsecond timer though, so
-the interval measurement itself is only good to ~1 µs. That sounds
-coarse, but it only enters the frequency calculation as the denominator
-— the numerator (10 million edge counts) does the heavy lifting.
+The PIO edge counter runs at the system clock (150 MHz, ~6.67 ns per
+tick), but that's just the speed at which PIO executes its instructions
+— the actual measurement resolution comes from counting complete 10 MHz
+edges over a one-second gate. The gate itself is GPS 1PPS, which we
+trust to be exactly one second (GPS 1PPS is accurate to ~30 ns).
 
-In practice, the 1-second gated count gives about ±0.1 Hz resolution,
-and averaging over several seconds smooths that further.
+So the frequency resolution is ±1 Hz per single-second gate (one edge
+more or less), and averaging over several seconds smooths that further.
 
 ---
 
