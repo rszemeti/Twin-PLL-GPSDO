@@ -138,6 +138,10 @@ static const uint32_t ADF2_REGS[6] = {
 #define DISC_LOCK_ENTER_THRESHOLD_NS  300
 #define DISC_LOCK_EXIT_THRESHOLD_NS   700
 #define DISC_LOCK_MIN_MS              20000
+// Require the DAC to be effectively settled for this long before lock can assert.
+#define DISC_LOCK_DAC_SETTLE_MS       120000
+// DAC motion smaller than this is treated as settled/noise.
+#define DISC_LOCK_DAC_STEP_THRESHOLD  2
 // EMA alpha for lock detection smoothing (1/N, N~10 update() calls)
 #define DISC_LOCK_EMA_ALPHA           0.1f
 

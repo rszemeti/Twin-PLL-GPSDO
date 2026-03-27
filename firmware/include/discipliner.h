@@ -67,6 +67,7 @@ private:
     uint16_t  _lastSavedValue;
     // EMA of abs error for lock detection (smooths GPS/counter noise)
     float     _lockErrEMA;
+    uint32_t  _lastDacMotionMs;
 
     void applyDAC(uint16_t val);
 };

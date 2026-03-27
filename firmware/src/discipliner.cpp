@@ -19,7 +19,7 @@ Discipliner::Discipliner(MCP4725 &dac)
       _holdoverSecs(0),
       _lastGPSsec(0),
             _everHadGPS(false), _lastSavedMs(0), _lastSavedValue(DAC_CENTRE),
-            _dacEnabled(true), _lockErrEMA(0.0f) {}
+        _dacEnabled(true), _lockErrEMA(0.0f), _lastDacMotionMs(0) {}
 
 void Discipliner::begin() {
     // Load saved "unlocked" DAC value from EEPROM if present
@@ -34,6 +34,7 @@ void Discipliner::begin() {
     _integral = (float)_dacValue;
     _lastSavedValue = _dacValue;
     _lastSavedMs = millis();
+    _lastDacMotionMs = _lastSavedMs;
     applyDAC(_dacValue);
 }
 
@@ -107,6 +108,8 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
                        ? _iGain * DISC_I_GAIN_LOCKED_RATIO
                        : _iGain;
 
+    uint16_t prevDacValue = _dacValue;
+
     // Negative feedback: positive error (OCXO fast) must reduce DAC/integral
     _integral -= effectiveI * (float)phaseError_ns;
 
@@ -118,9 +121,13 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
 
     _freqOffset_ppb = ((float)_dacValue - DAC_CENTRE) * 0.1f;
 
+    uint32_t now = millis();
+    if ((uint16_t)abs((int)_dacValue - (int)prevDacValue) >= DISC_LOCK_DAC_STEP_THRESHOLD) {
+        _lastDacMotionMs = now;
+    }
+
     // Lock detection — use smoothed EMA error plus hysteresis so occasional
     // noisy windows do not prevent lock or cause rapid lock/unlock chatter.
-    uint32_t now = millis();
     if (_state == DiscState::LOCKED) {
         if (_lockErrEMA > DISC_LOCK_EXIT_THRESHOLD_NS) {
             _lockMs = 0;
@@ -130,7 +137,8 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
             _lockMs = now - _lockEnteredMs;
         }
     } else {
-        if (_lockErrEMA < DISC_LOCK_ENTER_THRESHOLD_NS) {
+        bool dacSettled = (now - _lastDacMotionMs) >= DISC_LOCK_DAC_SETTLE_MS;
+        if (dacSettled && _lockErrEMA < DISC_LOCK_ENTER_THRESHOLD_NS) {
             if (_lockEnteredMs == 0) _lockEnteredMs = now;
             _lockMs = now - _lockEnteredMs;
             if (_state == DiscState::ACQUIRING && _lockMs >= DISC_LOCK_MIN_MS)
