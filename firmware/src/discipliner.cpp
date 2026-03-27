@@ -14,12 +14,13 @@ Discipliner::Discipliner(MCP4725 &dac)
     _iGain(DISC_I_GAIN),
       _calActive(false),
       _warmupCount(0),
-      _lockMs(0),
-      _lockEnteredMs(0),
+      _lockSecs(0),
       _holdoverSecs(0),
       _lastGPSsec(0),
             _everHadGPS(false), _lastSavedMs(0), _lastSavedValue(DAC_CENTRE),
-        _dacEnabled(true), _lockErrEMA(0.0f), _lastDacMotionMs(0) {}
+        _dacEnabled(true), _lockBufIdx(0), _lockBufCount(0) {
+    memset(_lockBuf, 0, sizeof(_lockBuf));
+}
 
 void Discipliner::begin() {
     // Load saved "unlocked" DAC value from EEPROM if present
@@ -34,7 +35,6 @@ void Discipliner::begin() {
     _integral = (float)_dacValue;
     _lastSavedValue = _dacValue;
     _lastSavedMs = millis();
-    _lastDacMotionMs = _lastSavedMs;
     applyDAC(_dacValue);
 }
 
@@ -97,18 +97,11 @@ void Discipliner::update(int32_t freqError_ppb, bool gpsValid) {
     }
 
     _lastFreqError = freqError_ppb;
-    int32_t absErr = abs(freqError_ppb);
-
-    // Update EMA of absolute error for lock detection — smooths GPS/counter noise
-    _lockErrEMA = DISC_LOCK_EMA_ALPHA * (float)absErr
-                  + (1.0f - DISC_LOCK_EMA_ALPHA) * _lockErrEMA;
 
     // Reduce gain when locked to narrow bandwidth and reduce jitter
     float effectiveI = (_state == DiscState::LOCKED)
                        ? _iGain * DISC_I_GAIN_LOCKED_RATIO
                        : _iGain;
-
-    uint16_t prevDacValue = _dacValue;
 
     // Negative feedback: positive error (OCXO fast) must reduce DAC/integral
     _integral -= effectiveI * (float)freqError_ppb;
@@ -121,34 +114,6 @@ void Discipliner::update(int32_t freqError_ppb, bool gpsValid) {
 
     _freqOffset_ppb = ((float)_dacValue - DAC_CENTRE) * 0.1f;
 
-    uint32_t now = millis();
-    if ((uint16_t)abs((int)_dacValue - (int)prevDacValue) >= DISC_LOCK_DAC_STEP_THRESHOLD) {
-        _lastDacMotionMs = now;
-    }
-
-    // Lock detection — use smoothed EMA error plus hysteresis so occasional
-    // noisy windows do not prevent lock or cause rapid lock/unlock chatter.
-    if (_state == DiscState::LOCKED) {
-        if (_lockErrEMA > DISC_LOCK_EXIT_THRESHOLD_NS) {
-            _lockMs = 0;
-            _lockEnteredMs = 0;
-            _state = DiscState::ACQUIRING;
-        } else if (_lockEnteredMs != 0) {
-            _lockMs = now - _lockEnteredMs;
-        }
-    } else {
-        bool dacSettled = (now - _lastDacMotionMs) >= DISC_LOCK_DAC_SETTLE_MS;
-        if (dacSettled && _lockErrEMA < DISC_LOCK_ENTER_THRESHOLD_NS) {
-            if (_lockEnteredMs == 0) _lockEnteredMs = now;
-            _lockMs = now - _lockEnteredMs;
-            if (_state == DiscState::ACQUIRING && _lockMs >= DISC_LOCK_MIN_MS)
-                _state = DiscState::LOCKED;
-        } else {
-            _lockMs = 0;
-            _lockEnteredMs = 0;
-        }
-    }
-
     applyDAC(_dacValue);
 
     // Occasionally save DAC as "unlocked" reference when it changes
@@ -160,6 +125,52 @@ void Discipliner::update(int32_t freqError_ppb, bool gpsValid) {
         EEPROM.commit();
         _lastSavedValue = _dacValue;
         _lastSavedMs = saveNow;
+    }
+}
+
+void Discipliner::feedLockSample(int32_t freqError_ppb) {
+    // Write into ring buffer
+    _lockBuf[_lockBufIdx] = freqError_ppb;
+    _lockBufIdx = (_lockBufIdx + 1) % DISC_LOCK_BUF_SIZE;
+    if (_lockBufCount < DISC_LOCK_BUF_SIZE) _lockBufCount++;
+
+    // Only evaluate lock when we're in ACQUIRING or LOCKED
+    if (_state == DiscState::ACQUIRING || _state == DiscState::LOCKED) {
+        evaluateLock();
+    }
+    if (_state == DiscState::LOCKED) {
+        _lockSecs++;
+    } else {
+        _lockSecs = 0;
+    }
+}
+
+void Discipliner::evaluateLock() {
+    // Need a full buffer before making any lock decision
+    if (_lockBufCount < DISC_LOCK_BUF_SIZE) return;
+
+    uint16_t goodCount = 0;
+    int64_t sum = 0;
+    for (uint16_t i = 0; i < DISC_LOCK_BUF_SIZE; i++) {
+        int32_t v = _lockBuf[i];
+        sum += v;
+        if (abs(v) <= DISC_LOCK_GOOD_PPB) goodCount++;
+    }
+
+    float goodFrac = (float)goodCount / (float)DISC_LOCK_BUF_SIZE;
+    int32_t meanPpb = (int32_t)(sum / DISC_LOCK_BUF_SIZE);
+    int32_t absMean = abs(meanPpb);
+
+    if (_state == DiscState::LOCKED) {
+        // Drop lock if too many bad samples or mean drifts
+        if (goodFrac < DISC_LOCK_EXIT_FRAC || absMean > DISC_LOCK_MEAN_EXIT_PPB) {
+            _state = DiscState::ACQUIRING;
+        }
+    } else {
+        // Enter lock if enough good samples and mean is tight
+        if (goodFrac >= DISC_LOCK_ENTER_FRAC && absMean <= DISC_LOCK_MEAN_ENTER_PPB) {
+            _state = DiscState::LOCKED;
+        }
     }
 }
 

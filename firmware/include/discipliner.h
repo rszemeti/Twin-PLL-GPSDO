@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "config.h"
 #include "mcp4725.h"
 
 enum class DiscState {
@@ -25,11 +26,16 @@ public:
     // not yet complete so warmup counts real seconds, not averaging windows.
     void tickWarmup(bool gpsValid);
 
+    // Feed a per-second frequency error sample into the lock-detection
+    // ring buffer.  Call this every second from main, independent of the
+    // averaging window used by update().
+    void feedLockSample(int32_t freqError_ppb);
+
     DiscState state()       { return _state; }
     uint16_t  dacValue()    { return _dacValue; }
     int32_t   freqError()   { return _lastFreqError; }
     float     frequency()   { return _freqOffset_ppb; }
-    uint32_t  lockSeconds() { return _lockMs / 1000; }
+    uint32_t  lockSeconds() { return _lockSecs; }
     float     pGain() const { return _pGain; }
     float     iGain() const { return _iGain; }
 
@@ -55,8 +61,7 @@ private:
     float     _pGain;
     float     _iGain;
     uint32_t  _warmupCount;
-    uint32_t  _lockMs;        // milliseconds continuously within lock threshold
-    uint32_t  _lockEnteredMs; // millis() when lock window started
+    uint32_t  _lockSecs;       // seconds continuously locked
     uint32_t  _holdoverSecs;
     uint32_t  _lastGPSsec;
     bool      _everHadGPS;
@@ -65,9 +70,11 @@ private:
     // EEPROM save state
     uint32_t  _lastSavedMs;
     uint16_t  _lastSavedValue;
-    // EMA of abs error for lock detection (smooths GPS/counter noise)
-    float     _lockErrEMA;
-    uint32_t  _lastDacMotionMs;
+    // Lock detection ring buffer (per-second freq error samples)
+    int32_t   _lockBuf[DISC_LOCK_BUF_SIZE];
+    uint16_t  _lockBufIdx;     // next write position
+    uint16_t  _lockBufCount;   // samples written (saturates at BUF_SIZE)
 
     void applyDAC(uint16_t val);
+    void evaluateLock();
 };

@@ -1338,6 +1338,8 @@ void loop() {
 
     if (tr.freqValid) {
         status.setMeasuredOCXO(tr.measuredFreq_Hz, tr.freqError_ppb);
+        // Feed every per-second sample into lock detection ring buffer
+        disc.feedLockSample((int32_t)lround(tr.freqError_ppb));
         freqErrorAccum += tr.freqError_ppb;
         freqErrorCount++;
 

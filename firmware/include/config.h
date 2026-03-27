@@ -132,18 +132,16 @@ static const uint32_t ADF2_REGS[6] = {
 // How many 1PPS edges to average before first correction
 #define DISC_WARMUP_SECS    0   // 0 = skip warmup (testing); set to e.g. 240 for normal use
 
-// Lock detection uses an EMA of the averaged correction error.
-// Enter with a reasonably tight threshold, but require a much larger
-// excursion to drop back out so single noisy windows do not clear lock.
-#define DISC_LOCK_ENTER_THRESHOLD_NS  300
-#define DISC_LOCK_EXIT_THRESHOLD_NS   700
-#define DISC_LOCK_MIN_MS              20000
-// Require the DAC to be effectively settled for this long before lock can assert.
-#define DISC_LOCK_DAC_SETTLE_MS       120000
-// DAC motion smaller than this is treated as settled/noise.
-#define DISC_LOCK_DAC_STEP_THRESHOLD  2
-// EMA alpha for lock detection smoothing (1/N, N~10 update() calls)
-#define DISC_LOCK_EMA_ALPHA           0.1f
+// Lock detection — ring buffer of per-second frequency errors.
+// A sample is "good" if |error| < GOOD threshold.
+// Enter lock when buffer is full, good fraction >= ENTER ratio, and |mean| < MEAN_ENTER.
+// Exit lock when good fraction < EXIT ratio or |mean| > MEAN_EXIT.
+#define DISC_LOCK_BUF_SIZE            60      // 60 seconds of per-second samples
+#define DISC_LOCK_GOOD_PPB            500     // ±500 ppb = ±5 Hz at 10 MHz
+#define DISC_LOCK_ENTER_FRAC          0.90f   // 90% good to enter lock
+#define DISC_LOCK_EXIT_FRAC           0.75f   // <75% good to drop lock
+#define DISC_LOCK_MEAN_ENTER_PPB      50      // |mean| < 50 ppb to enter
+#define DISC_LOCK_MEAN_EXIT_PPB       100     // |mean| > 100 ppb to exit
 
 // GPS lock required before disciplining starts
 #define GPS_FIX_REQUIRED    true

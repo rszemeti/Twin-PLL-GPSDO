@@ -185,27 +185,38 @@ each synthesiser PLL is happy with its own loop.
 
 ## 8) How lock detection actually works
 
-We deliberately don't declare lock just because the frequency error
-happens to be small for a moment. The firmware uses a multi-condition
-approach:
+Individual 1-second frequency readings are noisy — GPS 1PPS jitter can
+produce occasional outliers of ±1300 ppb (±13 Hz) even when the OCXO is
+perfectly stable. So we can't just look at one measurement and decide
+whether we're locked. Instead we look at a whole window of recent
+readings and ask two questions:
 
-1. **Error EMA** — an exponential moving average of the absolute
-   correction error (α = 0.1) must drop below the *enter* threshold.
-2. **Hysteresis** — once locked, the EMA must exceed a wider *exit*
-   threshold before lock is dropped. This stops the status flickering
-   on borderline noise.
-3. **DAC settling** — the DAC must not have moved by more than a few
-   counts for a configurable period (currently 120 s). This catches
-   the case where a warm restart seeds a good DAC value but the OCXO
-   hasn't truly stabilised yet.
-4. **Dwell time** — all of the above must remain true for a minimum
-   continuous period before lock is asserted.
+**Are most readings good?** The firmware keeps a ring buffer of the last
+60 per-second frequency error samples. Each sample is classified as
+"good" if it's within ±500 ppb (±5 Hz). GPS jitter outliers fail this
+test, but the vast majority of readings pass when the OCXO is on
+frequency.
 
-The net effect is that a cold start takes a couple of minutes to lock,
-and a warm restart (where the saved DAC is close) still waits for the
-DAC to genuinely stop moving before claiming lock. It's conservative
-on purpose — better to show ACQUIRING for an extra minute than to
-flash LOCKED prematurely.
+**Is the average close to zero?** The mean of those 60 samples should
+be very small when the oscillator is genuinely disciplined, because
+1PPS jitter is random and symmetric — it averages out. If the OCXO is
+actually drifting, the mean moves.
+
+Lock is entered when **both** conditions are met:
+- ≥90% of the buffer is "good" (≥54 out of 60 within ±500 ppb)
+- the mean of the buffer is within ±50 ppb (±0.5 Hz)
+
+Lock is dropped when **either** condition fails:
+- good fraction falls below 75% (fewer than 45 out of 60)
+- the mean exceeds ±100 ppb (±1 Hz)
+
+The hysteresis between enter and exit thresholds prevents the state
+from flickering on borderline noise.
+
+Because the buffer must be full (60 seconds of data) before lock is
+even considered, this naturally prevents premature lock on cold start
+or warm restart — the OCXO has to be running well for a solid minute
+before the firmware will claim it's locked.
 
 ---
 
@@ -213,10 +224,10 @@ flash LOCKED prematurely.
 
 | What | How |
 |------|-----|
-| PPS edge detection | PIO state machine, ISR timestamp |
-| Frequency measurement | PIO edge count of 10 MHz per PPS window |
+| PPS edge detection | PIO state machine, ISR fires on rising edge |
+| Frequency measurement | PIO edge count of 10 MHz per 1PPS gate |
 | Control update rate | Once per `DISC_AVERAGE_SECS` seconds |
 | Loop type | Pure integrator (no P term) |
 | DAC persistence | Saved to EEPROM, restored on restart |
-| Lock criteria | Low error EMA + settled DAC + dwell time |
+| Lock criteria | 60 s ring buffer: ≥90% good + low mean |
 | Gain management | Reduced gain when locked, full gain when acquiring |
