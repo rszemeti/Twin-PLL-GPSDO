@@ -16,9 +16,9 @@ public:
 
     void begin();
 
-    // Call once per 1PPS pulse, pass phase error in nanoseconds
+    // Call once per averaging window with the averaged frequency error in ppb.
     // Positive = OCXO running fast (needs EFC reduced)
-    void update(int32_t phaseError_ns, bool gpsValid);
+    void update(int32_t freqError_ppb, bool gpsValid);
 
     // Advance warmup/GPS-tracking state every PPS without applying a PI
     // correction.  Call this each second when the accumulation window is
@@ -27,7 +27,7 @@ public:
 
     DiscState state()       { return _state; }
     uint16_t  dacValue()    { return _dacValue; }
-    int32_t   phaseError()  { return _lastError; }
+    int32_t   freqError()   { return _lastFreqError; }
     float     frequency()   { return _freqOffset_ppb; }
     uint32_t  lockSeconds() { return _lockMs / 1000; }
     float     pGain() const { return _pGain; }
@@ -50,7 +50,7 @@ private:
     DiscState _state;
     uint16_t  _dacValue;
     float     _integral;
-    int32_t   _lastError;
+    int32_t   _lastFreqError;
     float     _freqOffset_ppb;
     float     _pGain;
     float     _iGain;

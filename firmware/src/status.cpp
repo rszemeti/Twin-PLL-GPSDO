@@ -218,9 +218,9 @@ void StatusManager::printDebug() {
         case DiscState::HOLDOVER:  doc["disc_state"] = "HOLDOVER"; break;
         case DiscState::FREERUN:   doc["disc_state"] = "FREERUN"; break;
     }
-    doc["phase_error_ns"] = _disc.phaseError();
+    doc["freq_error_ppb"] = _disc.freqError();
     doc["disc_avg_window_s"] = _discAvgWindowSecs;
-    doc["disc_avg_phase_ns"] = _disc.phaseError();
+    doc["disc_avg_freq_ppb"] = _disc.freqError();
     doc["disc_p_gain"] = _disc.pGain();
     doc["disc_i_gain"] = _disc.iGain();
     doc["status_interval_ms"] = _statusIntervalMs;
@@ -252,8 +252,8 @@ void StatusManager::printDebug() {
         case DiscState::FREERUN:   Serial.println("FREERUN");   break;
     }
 
-    Serial.print("Phase error: "); Serial.print(_disc.phaseError());
-    Serial.println(" ns");
+    Serial.print("Freq error: "); Serial.print(_disc.freqError());
+    Serial.println(" ppb");
     Serial.print("DAC value: ");   Serial.println(_disc.dacValue());
     Serial.print("Freq offset: "); Serial.print(_disc.frequency(), 3);
     Serial.println(" ppb");

@@ -1271,8 +1271,8 @@ void loop() {
     // The valid observable on this hardware path is the PPS-gated 10 MHz
     // frequency error. Integrate the per-second ppb error over the averaging
     // window to obtain an effective phase-drift term in ns for the PI loop.
-    static double controlErrorAccumNs = 0.0;
-    static uint32_t controlErrorCount = 0;
+    static double freqErrorAccum = 0.0;
+    static uint32_t freqErrorCount = 0;
 
     // EFC calibration state machine — suspends normal discipliner while running.
     if (g_efcCalState != EFCCalState::IDLE) {
@@ -1325,8 +1325,8 @@ void loop() {
                     disc.setDACValue(DAC_CENTRE);
                     disc.resetIntegral();
                     disc.setCalActive(false);
-                    controlErrorAccumNs = 0.0;
-                    controlErrorCount = 0;
+                    freqErrorAccum = 0.0;
+                    freqErrorCount = 0;
                     g_efcCalState = EFCCalState::IDLE;
                 }
                 break;
@@ -1338,27 +1338,27 @@ void loop() {
 
     if (tr.freqValid) {
         status.setMeasuredOCXO(tr.measuredFreq_Hz, tr.freqError_ppb);
-        controlErrorAccumNs += tr.freqError_ppb;
-        controlErrorCount++;
+        freqErrorAccum += tr.freqError_ppb;
+        freqErrorCount++;
 
-        if (controlErrorCount >= g_discAverageSecs) {
+        if (freqErrorCount >= g_discAverageSecs) {
             // Average freq error per second in ppb.
             // Negative = OCXO slow = discipliner must increase DAC.
             // discipliner.update() applies negative feedback: _integral -= iGain * error
             // so a negative error correctly increases the integral.
-            double avgError = controlErrorAccumNs / (double)controlErrorCount;
-            int32_t effectivePhaseNs = (int32_t)lround(avgError);
-            disc.update(effectivePhaseNs, gpsGood);
-            controlErrorAccumNs = 0.0;
-            controlErrorCount = 0;
+            double avgError = freqErrorAccum / (double)freqErrorCount;
+            int32_t avgFreqError_ppb = (int32_t)lround(avgError);
+            disc.update(avgFreqError_ppb, gpsGood);
+            freqErrorAccum = 0.0;
+            freqErrorCount = 0;
         } else {
             // Tick the state machine every second so warmup counts PPS pulses,
             // not averaging windows.  Pass 0 correction — no DAC change.
             disc.tickWarmup(gpsGood);
         }
     } else if (!gpsGood) {
-        controlErrorAccumNs = 0.0;
-        controlErrorCount = 0;
+        freqErrorAccum = 0.0;
+        freqErrorCount = 0;
         disc.update(0, false);
     }
 

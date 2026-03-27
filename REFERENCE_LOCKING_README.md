@@ -52,15 +52,14 @@ EMA of error + settle timer]
 ### 2.1 PPS capture
 
 A PIO state machine watches the GPS 1PPS line. When it sees a rising
-edge it fires `PIO0_IRQ_0`, and the ISR triggers the edge-counter
-snapshot (see below). The ISR also grabs a microsecond timestamp from
-`timer_hw->timerawl` — that's only used for the separate phase-error
-telemetry field, not for frequency measurement.
+edge it fires `PIO0_IRQ_0`, which triggers the edge-counter snapshot
+described below.
 
-We trust the GPS 1PPS to *be* one second. GPS 1PPS accuracy is
+We trust the GPS 1PPS to *be* one second — GPS 1PPS accuracy is
 typically ±30 ns, which is far better than anything we could measure
-with an on-chip microsecond timer. So the gate interval is simply
-1 second by definition — no division by a measured interval needed.
+on-chip. So the gate interval is simply one second by definition, and
+the edge count over that gate *is* the OCXO frequency in Hz. No
+division by a measured interval is needed or done.
 
 ### 2.2 Counting 10 MHz edges — the "counter around zero" model
 
@@ -144,7 +143,7 @@ The firmware sends two kinds of JSON messages over the serial link.
 
 **Status** (periodic) — carries the full system snapshot: GPS fix,
 DAC value, ADF lock-detect states, discipliner state, plus averaging
-visibility fields (`disc_avg_window_s`, `disc_avg_phase_ns`) so the
+visibility fields (`disc_avg_window_s`, `disc_avg_freq_ppb`) so the
 monitor app can show what the loop is doing.
 
 ---

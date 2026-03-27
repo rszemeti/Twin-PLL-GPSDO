@@ -413,20 +413,20 @@ class StepResponseDialog(QDialog):
     def reset_samples(self):
         self.samples = []
         self.sample_view.clear()
-        self.sample_view.append('t_s,phase_error_ns,dac_value,disc_state')
+        self.sample_view.append('t_s,freq_error_ppb,dac_value,disc_state')
 
-    def add_sample(self, t_s, phase_error_ns, dac_value, disc_state):
+    def add_sample(self, t_s, freq_error_ppb, dac_value, disc_state):
         row = {
             't_s': t_s,
-            'phase_error_ns': phase_error_ns,
+            'freq_error_ppb': freq_error_ppb,
             'dac_value': dac_value,
             'disc_state': disc_state,
         }
         self.samples.append(row)
-        phase_txt = '' if phase_error_ns is None else str(phase_error_ns)
+        freq_txt = '' if freq_error_ppb is None else str(freq_error_ppb)
         dac_txt = '' if dac_value is None else str(dac_value)
         state_txt = '' if disc_state is None else str(disc_state)
-        self.sample_view.append(f'{t_s:.3f},{phase_txt},{dac_txt},{state_txt}')
+        self.sample_view.append(f'{t_s:.3f},{freq_txt},{dac_txt},{state_txt}')
 
     def _on_start(self):
         parent = self.parent()
@@ -447,12 +447,12 @@ class StepResponseDialog(QDialog):
             return
         try:
             with open(path, 'w', encoding='utf-8') as f:
-                f.write('t_s,phase_error_ns,dac_value,disc_state\n')
+                f.write('t_s,freq_error_ppb,dac_value,disc_state\n')
                 for row in self.samples:
-                    phase_txt = '' if row['phase_error_ns'] is None else str(row['phase_error_ns'])
+                    freq_txt = '' if row['freq_error_ppb'] is None else str(row['freq_error_ppb'])
                     dac_txt = '' if row['dac_value'] is None else str(row['dac_value'])
                     state_txt = '' if row['disc_state'] is None else str(row['disc_state'])
-                    f.write(f"{row['t_s']:.6f},{phase_txt},{dac_txt},{state_txt}\n")
+                    f.write(f"{row['t_s']:.6f},{freq_txt},{dac_txt},{state_txt}\n")
             QMessageBox.information(self, 'Saved', f'Step response saved to:\n{path}')
         except Exception as e:
             QMessageBox.warning(self, 'Save failed', f'Failed to save CSV:\n{e}')
@@ -598,7 +598,7 @@ class MainWindow(QWidget):
         self.disc_state = QLabel('')
         self.phase_error = QLabel('')
         self.disc_avg_window = QLabel('')
-        self.disc_avg_phase = QLabel('')
+        self.disc_avg_freq = QLabel('')
         self.dac_value = QLabel('')
         self.measured_freq_hz = QLabel('')
         self.measured_freq_raw_hz = QLabel('')
@@ -620,9 +620,9 @@ class MainWindow(QWidget):
         grid.addWidget(QLabel('HDOP'), 7, 0); grid.addWidget(self.hdop, 7, 1)
         self.hdop.setStyleSheet('font-weight: 700; color: #aeb7c2;')
         grid.addWidget(QLabel('Disc State'), 8, 0); grid.addWidget(self.disc_state, 8, 1)
-        grid.addWidget(QLabel('Phase error (ns)'), 9, 0); grid.addWidget(self.phase_error, 9, 1)
+        grid.addWidget(QLabel('Freq error (ppb)'), 9, 0); grid.addWidget(self.phase_error, 9, 1)
         grid.addWidget(QLabel('Disc avg window (s)'), 10, 0); grid.addWidget(self.disc_avg_window, 10, 1)
-        grid.addWidget(QLabel('Disc avg phase (ns)'), 11, 0); grid.addWidget(self.disc_avg_phase, 11, 1)
+        grid.addWidget(QLabel('Disc avg freq err (ppb)'), 11, 0); grid.addWidget(self.disc_avg_freq, 11, 1)
         grid.addWidget(QLabel('DAC Value'), 12, 0); grid.addWidget(self.dac_value, 12, 1)
         grid.addWidget(QLabel('Measured freq (10 s avg)'), 13, 0); grid.addWidget(self.measured_freq_hz, 13, 1)
         grid.addWidget(QLabel('Measured freq (1 s raw)'), 14, 0); grid.addWidget(self.measured_freq_raw_hz, 14, 1)
@@ -1336,10 +1336,10 @@ class MainWindow(QWidget):
     def _handle_step_sample(self, obj):
         if not self.step_test_active or self.step_dialog is None:
             return
-        if ('phase_error_ns' not in obj and 'dac_value' not in obj and 'disc_state' not in obj):
+        if ('freq_error_ppb' not in obj and 'dac_value' not in obj and 'disc_state' not in obj):
             return
         t_s = time.monotonic() - self.step_test_started_at
-        phase = obj.get('phase_error_ns')
+        phase = obj.get('freq_error_ppb')
         dac = obj.get('dac_value')
         state = obj.get('disc_state')
         self.step_dialog.add_sample(t_s, phase, dac, state)
@@ -1474,12 +1474,12 @@ class MainWindow(QWidget):
                 disc_state = str(obj.get('disc_state'))
                 self.status_state['disc_state'] = disc_state
                 self.disc_state.setText(disc_state)
-            if 'phase_error_ns' in obj:
-                self.phase_error.setText(str(obj.get('phase_error_ns')))
+            if 'freq_error_ppb' in obj:
+                self.phase_error.setText(str(obj.get('freq_error_ppb')))
             if 'disc_avg_window_s' in obj:
                 self.disc_avg_window.setText(str(obj.get('disc_avg_window_s')))
-            if 'disc_avg_phase_ns' in obj:
-                self.disc_avg_phase.setText(str(obj.get('disc_avg_phase_ns')))
+            if 'disc_avg_freq_ppb' in obj:
+                self.disc_avg_freq.setText(str(obj.get('disc_avg_freq_ppb')))
             if 'measured_freq_hz' in obj:
                 freq_hz = float(obj.get('measured_freq_hz'))
                 self.measured_freq_raw_hz.setText(f"{freq_hz:.6f}")

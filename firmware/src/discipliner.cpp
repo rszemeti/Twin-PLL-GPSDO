@@ -8,7 +8,7 @@ Discipliner::Discipliner(MCP4725 &dac)
       _state(DiscState::WARMUP),
       _dacValue(DAC_CENTRE),
       _integral(DAC_CENTRE),
-      _lastError(0),
+      _lastFreqError(0),
       _freqOffset_ppb(0.0f),
     _pGain(DISC_P_GAIN),
     _iGain(DISC_I_GAIN),
@@ -60,7 +60,7 @@ void Discipliner::tickWarmup(bool gpsValid) {
     }
 }
 
-void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
+void Discipliner::update(int32_t freqError_ppb, bool gpsValid) {
     if (_calActive) return;  // loop suspended during cal
 
     if (gpsValid) {
@@ -96,8 +96,8 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
             return;
     }
 
-    _lastError = phaseError_ns;
-    int32_t absErr = abs(phaseError_ns);
+    _lastFreqError = freqError_ppb;
+    int32_t absErr = abs(freqError_ppb);
 
     // Update EMA of absolute error for lock detection — smooths GPS/counter noise
     _lockErrEMA = DISC_LOCK_EMA_ALPHA * (float)absErr
@@ -111,7 +111,7 @@ void Discipliner::update(int32_t phaseError_ns, bool gpsValid) {
     uint16_t prevDacValue = _dacValue;
 
     // Negative feedback: positive error (OCXO fast) must reduce DAC/integral
-    _integral -= effectiveI * (float)phaseError_ns;
+    _integral -= effectiveI * (float)freqError_ppb;
 
     // Clamp integral
     if (_integral > DAC_MAX) _integral = DAC_MAX;
