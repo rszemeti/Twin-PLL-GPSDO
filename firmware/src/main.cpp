@@ -1134,12 +1134,13 @@ void setup() {
         dac.begin();
     }
 #endif
-    disc.begin();
-    status.begin();
 
     // EEPROM emulation must be initialized before put/get and committed after writes.
     // Reserve a small region sufficient for DAC + ADF blocks.
     EEPROM.begin(1024);
+
+    disc.begin();
+    status.begin();
     loadDiscCtrlSettings(true);
 
 #if ADF_PERSIST_EEPROM

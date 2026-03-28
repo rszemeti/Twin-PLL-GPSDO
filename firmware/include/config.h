@@ -130,7 +130,7 @@ static const uint32_t ADF2_REGS[6] = {
 #define DAC_CENTRE          2048     // nominal centre voltage
 
 // How many 1PPS edges to average before first correction
-#define DISC_WARMUP_SECS    0   // 0 = skip warmup (testing); set to e.g. 240 for normal use
+#define DISC_WARMUP_SECS    30
 
 // Lock detection — ring buffer of per-second DAC snapshots.
 // Lock is declared when the DAC has been stable (small range over
