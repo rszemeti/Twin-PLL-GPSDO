@@ -14,11 +14,12 @@ In broad strokes:
 1. Detect each GPS 1PPS rising edge.
 2. Count how many 10 MHz cycles occurred during that one-second window.
 3. Work out the frequency error in ppb.
-4. Average that error over several seconds (`DISC_AVERAGE_SECS`).
-5. Nudge the DAC (which controls the OCXO EFC voltage) by the integral
-   of the averaged error.
-6. Only declare "locked" once the error has been small *and* the DAC has
-   stopped moving for long enough to be credible.
+4. Keep a rolling average of the last N seconds of error.
+5. Every second, nudge the DAC (which controls the OCXO EFC voltage) by
+   the integral of the rolling-average error, scaled by 1/N so the loop
+   bandwidth stays constant regardless of the window length.
+6. Only declare "locked" once the DAC output has been stable (not moving
+   much) for long enough to be credible.
 
 Here is the signal flow through the loop:
 
@@ -38,7 +39,7 @@ DAC -= gain × avg error]
     DAC --> OCXO
 
     AVG --> LOCK[Lock detector
-EMA of error + settle timer]
+DAC stability over 60 s window]
     LOCK --> STATE[ACQUIRING / LOCKED / HOLDOVER]
     STATE -.-> INT
 
@@ -102,18 +103,35 @@ $$
 error_{ppb} = \frac{error_{Hz}}{10{,}000{,}000} \cdot 10^9 = error_{Hz} \times 100
 $$
 
+A **sanity gate** rejects any reading where the error exceeds ±50 kHz
+(±0.5%). This catches partial first-second counts after a warm reset
+(the PIO counter starts mid-PPS period and gets a nonsense edge count)
+and cold OCXO startup where the crystal hasn't reached full amplitude
+yet. Rejected readings are marked invalid so they never reach the
+rolling average, the integrator, or the lock detector.
+
 ---
 
 ## 3) The control loop
 
-Every `DISC_AVERAGE_SECS` seconds the main loop hands the discipliner an
-averaged frequency error. The discipliner is a pure integrator — there is
-no proportional term. It simply adjusts the DAC by `i_gain × avg_error`
-each update.
+The firmware maintains a rolling ring buffer of per-second frequency
+error samples. Every second, it computes the mean over the most recent
+N samples and passes that to the discipliner. The discipliner is a pure
+integrator — there is no proportional term. It adjusts the DAC by
+`i_gain / N × avg_error` each second, where the division by N keeps the
+effective loop bandwidth constant regardless of the averaging window.
 
-When the loop is locked the gain is reduced by `DISC_I_GAIN_LOCKED_RATIO`
-(currently ×0.25) so that small residual noise doesn't keep jiggling the
-DAC around. If lock is lost the full acquisition gain kicks back in.
+The loop runs in two modes:
+
+- **Acquiring** — uses a short window (`DISC_AVERAGE_SECS / 4`, e.g. 8 s)
+  with the full I gain for fast pull-in.
+- **Locked** — switches to the full window (`DISC_AVERAGE_SECS`, e.g. 32 s)
+  and reduces the gain by `DISC_I_GAIN_LOCKED_RATIO` (currently ×0.25)
+  for stability. The longer window plus the lower gain together narrow
+  the loop bandwidth considerably, so small residual noise doesn't keep
+  jiggling the DAC around.
+
+If lock is lost the short window and full gain kick back in.
 
 On power-up the firmware reads the last-known DAC value from EEPROM and
 seeds the integrator with it, so the OCXO starts very close to where it
@@ -185,38 +203,39 @@ each synthesiser PLL is happy with its own loop.
 
 ## 8) How lock detection actually works
 
-Individual 1-second frequency readings are noisy — GPS 1PPS jitter can
+Frequency-error readings are inherently noisy — GPS 1PPS jitter can
 produce occasional outliers of ±1300 ppb (±13 Hz) even when the OCXO is
-perfectly stable. So we can't just look at one measurement and decide
-whether we're locked. Instead we look at a whole window of recent
-readings and ask two questions:
+perfectly stable. Trying to judge lock from the frequency error alone
+turns out to be unreliable because those outliers poison any simple
+threshold or average.
 
-**Are most readings good?** The firmware keeps a ring buffer of the last
-60 per-second frequency error samples. Each sample is classified as
-"good" if it's within ±500 ppb (±5 Hz). GPS jitter outliers fail this
-test, but the vast majority of readings pass when the OCXO is on
-frequency.
+What *does* tell us whether the loop has converged is the DAC output.
+When the integrator has found the right EFC voltage, the DAC value
+stops moving — it just sits there, with small corrections that don't
+add up to much. If the OCXO is genuinely drifting, the DAC has to
+chase it and the value trends steadily in one direction.
 
-**Is the average close to zero?** The mean of those 60 samples should
-be very small when the oscillator is genuinely disciplined, because
-1PPS jitter is random and symmetric — it averages out. If the OCXO is
-actually drifting, the mean moves.
+The firmware keeps a ring buffer of the last 60 per-second DAC
+snapshots and looks at the range (max − min) over that window:
 
-Lock is entered when **both** conditions are met:
-- ≥90% of the buffer is "good" (≥54 out of 60 within ±500 ppb)
-- the mean of the buffer is within ±50 ppb (±0.5 Hz)
+- **Lock is entered** when the DAC range over 60 seconds is
+  ≤ `DISC_LOCK_DAC_RANGE_ENTER` (currently 30 counts) and the DAC is
+  not railed at `DAC_MIN` or `DAC_MAX`.
+- **Lock is dropped** when the range exceeds
+  `DISC_LOCK_DAC_RANGE_EXIT` (currently 50 counts).
 
-Lock is dropped when **either** condition fails:
-- good fraction falls below 75% (fewer than 45 out of 60)
-- the mean exceeds ±100 ppb (±1 Hz)
-
-The hysteresis between enter and exit thresholds prevents the state
+The hysteresis between the enter and exit thresholds prevents the state
 from flickering on borderline noise.
 
-Because the buffer must be full (60 seconds of data) before lock is
-even considered, this naturally prevents premature lock on cold start
-or warm restart — the OCXO has to be running well for a solid minute
-before the firmware will claim it's locked.
+The lock buffer is only populated while the discipliner is in ACQUIRING
+or LOCKED state — during FREERUN or WARMUP a constant DAC value would
+otherwise fill the buffer and falsely declare lock. If lock is lost the
+buffer is reset so the full 60-second dwell is required again.
+
+Because the buffer must be full (60 seconds of stable DAC data) before
+lock is even considered, this naturally prevents premature lock on cold
+start or warm restart — the loop has to have converged and settled for
+a solid minute before the firmware will claim it's locked.
 
 ---
 
@@ -226,8 +245,9 @@ before the firmware will claim it's locked.
 |------|-----|
 | PPS edge detection | PIO state machine, ISR fires on rising edge |
 | Frequency measurement | PIO edge count of 10 MHz per 1PPS gate |
-| Control update rate | Once per `DISC_AVERAGE_SECS` seconds |
-| Loop type | Pure integrator (no P term) |
+| Control update rate | Every second (rolling average) |
+| Loop type | Pure integrator (no P term), I gain scaled by 1/window |
+| Averaging window | Acquiring: base/4 (8 s), Locked: base (32 s) |
 | DAC persistence | Saved to EEPROM, restored on restart |
-| Lock criteria | 60 s ring buffer: ≥90% good + low mean |
-| Gain management | Reduced gain when locked, full gain when acquiring |
+| Lock criteria | 60 s DAC ring buffer: range ≤ 30 counts to enter, > 50 to exit |
+| Gain management | Reduced gain + longer window when locked; full gain + short window when acquiring |

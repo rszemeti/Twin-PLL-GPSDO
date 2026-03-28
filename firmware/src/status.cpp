@@ -225,6 +225,7 @@ void StatusManager::printDebug() {
     doc["disc_i_gain"] = _disc.iGain();
     doc["status_interval_ms"] = _statusIntervalMs;
     doc["dac_value"] = _disc.dacValue();
+    doc["saved_dac"] = _disc.lastSavedDAC();
     doc["freq_ppb"] = _disc.frequency();
     doc["measured_freq_hz"] = _measuredFreqHz;
     doc["measured_freq_error_ppb"] = _measuredFreqErrorPpb;

@@ -19,20 +19,24 @@ public:
 
     // Call once per averaging window with the averaged frequency error in ppb.
     // Positive = OCXO running fast (needs EFC reduced)
-    void update(int32_t freqError_ppb, bool gpsValid);
+    // avgWindow: number of seconds in the rolling average; I gain is divided
+    //            by this so the per-second call produces the same total
+    //            correction as the old once-per-window call.
+    void update(int32_t freqError_ppb, bool gpsValid, uint32_t avgWindow = 1);
 
     // Advance warmup/GPS-tracking state every PPS without applying a PI
     // correction.  Call this each second when the accumulation window is
     // not yet complete so warmup counts real seconds, not averaging windows.
     void tickWarmup(bool gpsValid);
 
-    // Feed a per-second frequency error sample into the lock-detection
-    // ring buffer.  Call this every second from main, independent of the
-    // averaging window used by update().
-    void feedLockSample(int32_t freqError_ppb);
+    // Snapshot the current DAC value into the lock-detection ring buffer.
+    // Call this every second from main, independent of the averaging
+    // window used by update().
+    void feedLockSample();
 
     DiscState state()       { return _state; }
     uint16_t  dacValue()    { return _dacValue; }
+    uint16_t  lastSavedDAC() { return _lastSavedValue; }
     int32_t   freqError()   { return _lastFreqError; }
     float     frequency()   { return _freqOffset_ppb; }
     uint32_t  lockSeconds() { return _lockSecs; }
@@ -70,8 +74,8 @@ private:
     // EEPROM save state
     uint32_t  _lastSavedMs;
     uint16_t  _lastSavedValue;
-    // Lock detection ring buffer (per-second freq error samples)
-    int32_t   _lockBuf[DISC_LOCK_BUF_SIZE];
+    // Lock detection ring buffer (per-second DAC snapshots)
+    uint16_t  _lockBuf[DISC_LOCK_BUF_SIZE];
     uint16_t  _lockBufIdx;     // next write position
     uint16_t  _lockBufCount;   // samples written (saturates at BUF_SIZE)
 

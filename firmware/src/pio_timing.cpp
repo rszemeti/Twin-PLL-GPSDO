@@ -221,13 +221,21 @@ void PIOTimingEngine::processPPS(uint32_t ts_us) {
         // pulse_count over one 1PPS window IS the frequency in Hz.
         // error = counts - nominal, scaled to ppb.
         const int32_t freqError_Hz = (int32_t)edgesThisSec - (int32_t)_ocxoHz;
-        const double error_ppb     = (double)freqError_Hz * (1e9 / (double)_ocxoHz);
 
-        _result.freqValid       = true;
-        _result.freqPulseCount  = edgesThisSec;
-        _result.measuredFreq_Hz = edgesThisSec;   // counts = Hz over 1 PPS window
-        _result.freqError_ppb   = error_ppb;
-        _result.freqCycleCount  = interval_us;
+        // Sanity gate: reject partial-second counts after a warm reset
+        // or during OCXO power-up.  Anything more than ±0.5% off nominal
+        // (±50 kHz for 10 MHz) is clearly not a real measurement.
+        if (freqError_Hz > 50000 || freqError_Hz < -50000) {
+            _result.freqValid = false;
+        } else {
+            const double error_ppb = (double)freqError_Hz * (1e9 / (double)_ocxoHz);
+
+            _result.freqValid       = true;
+            _result.freqPulseCount  = edgesThisSec;
+            _result.measuredFreq_Hz = edgesThisSec;   // counts = Hz over 1 PPS window
+            _result.freqError_ppb   = error_ppb;
+            _result.freqCycleCount  = interval_us;
+        }
     } else {
         if (!_freqSeeded) {
             _prevEdgeX  = xNow;

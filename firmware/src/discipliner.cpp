@@ -60,7 +60,7 @@ void Discipliner::tickWarmup(bool gpsValid) {
     }
 }
 
-void Discipliner::update(int32_t freqError_ppb, bool gpsValid) {
+void Discipliner::update(int32_t freqError_ppb, bool gpsValid, uint32_t avgWindow) {
     if (_calActive) return;  // loop suspended during cal
 
     if (gpsValid) {
@@ -103,6 +103,10 @@ void Discipliner::update(int32_t freqError_ppb, bool gpsValid) {
                        ? _iGain * DISC_I_GAIN_LOCKED_RATIO
                        : _iGain;
 
+    // Scale I gain by 1/avgWindow so per-second calls produce the same
+    // total correction as the old once-per-window call.
+    if (avgWindow > 1) effectiveI /= (float)avgWindow;
+
     // Negative feedback: positive error (OCXO fast) must reduce DAC/integral
     _integral -= effectiveI * (float)freqError_ppb;
 
@@ -128,16 +132,20 @@ void Discipliner::update(int32_t freqError_ppb, bool gpsValid) {
     }
 }
 
-void Discipliner::feedLockSample(int32_t freqError_ppb) {
-    // Write into ring buffer
-    _lockBuf[_lockBufIdx] = freqError_ppb;
+void Discipliner::feedLockSample() {
+    // Only collect DAC samples while actively disciplining.
+    // During WARMUP / FREERUN / HOLDOVER the DAC is static and would
+    // fill the buffer with a constant, giving a false "stable" reading.
+    if (_state != DiscState::ACQUIRING && _state != DiscState::LOCKED)
+        return;
+
+    // Snapshot current DAC value into ring buffer
+    _lockBuf[_lockBufIdx] = _dacValue;
     _lockBufIdx = (_lockBufIdx + 1) % DISC_LOCK_BUF_SIZE;
     if (_lockBufCount < DISC_LOCK_BUF_SIZE) _lockBufCount++;
 
-    // Only evaluate lock when we're in ACQUIRING or LOCKED
-    if (_state == DiscState::ACQUIRING || _state == DiscState::LOCKED) {
-        evaluateLock();
-    }
+    evaluateLock();
+
     if (_state == DiscState::LOCKED) {
         _lockSecs++;
     } else {
@@ -149,26 +157,27 @@ void Discipliner::evaluateLock() {
     // Need a full buffer before making any lock decision
     if (_lockBufCount < DISC_LOCK_BUF_SIZE) return;
 
-    uint16_t goodCount = 0;
-    int64_t sum = 0;
-    for (uint16_t i = 0; i < DISC_LOCK_BUF_SIZE; i++) {
-        int32_t v = _lockBuf[i];
-        sum += v;
-        if (abs(v) <= DISC_LOCK_GOOD_PPB) goodCount++;
+    // Find min and max DAC value over the buffer window
+    uint16_t minDac = _lockBuf[0];
+    uint16_t maxDac = _lockBuf[0];
+    for (uint16_t i = 1; i < DISC_LOCK_BUF_SIZE; i++) {
+        if (_lockBuf[i] < minDac) minDac = _lockBuf[i];
+        if (_lockBuf[i] > maxDac) maxDac = _lockBuf[i];
     }
-
-    float goodFrac = (float)goodCount / (float)DISC_LOCK_BUF_SIZE;
-    int32_t meanPpb = (int32_t)(sum / DISC_LOCK_BUF_SIZE);
-    int32_t absMean = abs(meanPpb);
+    uint16_t dacRange = maxDac - minDac;
+    bool railed = (_dacValue <= DAC_MIN || _dacValue >= DAC_MAX);
 
     if (_state == DiscState::LOCKED) {
-        // Drop lock if too many bad samples or mean drifts
-        if (goodFrac < DISC_LOCK_EXIT_FRAC || absMean > DISC_LOCK_MEAN_EXIT_PPB) {
+        // Drop lock if DAC is moving too much or has railed
+        if (dacRange > DISC_LOCK_DAC_RANGE_EXIT || railed) {
             _state = DiscState::ACQUIRING;
+            // Reset buffer so re-lock requires a full window of stability
+            _lockBufIdx = 0;
+            _lockBufCount = 0;
         }
     } else {
-        // Enter lock if enough good samples and mean is tight
-        if (goodFrac >= DISC_LOCK_ENTER_FRAC && absMean <= DISC_LOCK_MEAN_ENTER_PPB) {
+        // Enter lock when DAC is stable and not railed
+        if (dacRange <= DISC_LOCK_DAC_RANGE_ENTER && !railed) {
             _state = DiscState::LOCKED;
         }
     }

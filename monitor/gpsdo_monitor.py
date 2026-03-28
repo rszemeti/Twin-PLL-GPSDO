@@ -538,7 +538,7 @@ class MainWindow(QWidget):
             'p_gain': None,
             'i_gain': None,
         }
-        self._freq_hz_samples = deque()
+        self._freq_hz_samples_removed = True  # measured freq display removed
         self.status_state = {
             'gps_fix': False,
             'gps_pps': False,
@@ -600,9 +600,7 @@ class MainWindow(QWidget):
         self.disc_avg_window = QLabel('')
         self.disc_avg_freq = QLabel('')
         self.dac_value = QLabel('')
-        self.measured_freq_hz = QLabel('')
-        self.measured_freq_raw_hz = QLabel('')
-        self.measured_freq_error_ppb = QLabel('')
+        self.saved_dac = QLabel('')
         self.adf1_locked = QLabel('')
         self.adf2_locked = QLabel('')
         self.adf1_freq = QLabel('')
@@ -624,15 +622,13 @@ class MainWindow(QWidget):
         grid.addWidget(QLabel('Disc avg window (s)'), 10, 0); grid.addWidget(self.disc_avg_window, 10, 1)
         grid.addWidget(QLabel('Disc avg freq err (ppb)'), 11, 0); grid.addWidget(self.disc_avg_freq, 11, 1)
         grid.addWidget(QLabel('DAC Value'), 12, 0); grid.addWidget(self.dac_value, 12, 1)
-        grid.addWidget(QLabel('Measured freq (10 s avg)'), 13, 0); grid.addWidget(self.measured_freq_hz, 13, 1)
-        grid.addWidget(QLabel('Measured freq (1 s raw)'), 14, 0); grid.addWidget(self.measured_freq_raw_hz, 14, 1)
-        grid.addWidget(QLabel('Measured freq error (ppb)'), 15, 0); grid.addWidget(self.measured_freq_error_ppb, 15, 1)
-        grid.addWidget(QLabel('adf1_locked'), 16, 0); grid.addWidget(self.adf1_locked, 16, 1)
-        grid.addWidget(QLabel('adf2_locked'), 17, 0); grid.addWidget(self.adf2_locked, 17, 1)
-        grid.addWidget(QLabel('adf1 decoded'), 18, 0); grid.addWidget(self.adf1_freq, 18, 1)
-        grid.addWidget(QLabel('adf2 decoded'), 19, 0); grid.addWidget(self.adf2_freq, 19, 1)
-        grid.addWidget(QLabel('Disc P gain'), 20, 0); grid.addWidget(self.disc_p_gain, 20, 1)
-        grid.addWidget(QLabel('Disc I gain'), 21, 0); grid.addWidget(self.disc_i_gain, 21, 1)
+        grid.addWidget(QLabel('Last Saved DAC'), 13, 0); grid.addWidget(self.saved_dac, 13, 1)
+        grid.addWidget(QLabel('adf1_locked'), 14, 0); grid.addWidget(self.adf1_locked, 14, 1)
+        grid.addWidget(QLabel('adf2_locked'), 15, 0); grid.addWidget(self.adf2_locked, 15, 1)
+        grid.addWidget(QLabel('adf1 decoded'), 16, 0); grid.addWidget(self.adf1_freq, 16, 1)
+        grid.addWidget(QLabel('adf2 decoded'), 17, 0); grid.addWidget(self.adf2_freq, 17, 1)
+        grid.addWidget(QLabel('Disc P gain'), 18, 0); grid.addWidget(self.disc_p_gain, 18, 1)
+        grid.addWidget(QLabel('Disc I gain'), 19, 0); grid.addWidget(self.disc_i_gain, 19, 1)
 
         status_box.setLayout(grid)
 
@@ -785,14 +781,6 @@ class MainWindow(QWidget):
         self.dac_percent_main.setStyleSheet('color: #aeb7c2;')
         dac_detail_row.addWidget(self.dac_percent_main)
         dac_layout.addLayout(dac_detail_row)
-
-        avg_freq_row = QHBoxLayout()
-        avg_freq_row.addWidget(QLabel('Avg freq (10 s):'))
-        avg_freq_row.addStretch(1)
-        self.avg_freq_label = QLabel('-')
-        self.avg_freq_label.setStyleSheet('font-size: 18px; font-weight: 700; color: #79c0ff;')
-        avg_freq_row.addWidget(self.avg_freq_label)
-        dac_layout.addLayout(avg_freq_row)
 
         self.dac_history = DACHistoryWidget()
         dac_layout.addWidget(self.dac_history)
@@ -1028,23 +1016,6 @@ class MainWindow(QWidget):
             return
         dot.setStyleSheet(f"color: {color if on else '#3a3a3a'}; font-size: 20px;")
 
-    def _update_avg_freq(self, freq_hz):
-        now = time.monotonic()
-        self._freq_hz_samples.append((now, float(freq_hz)))
-
-        cutoff = now - 10.0
-        while self._freq_hz_samples and self._freq_hz_samples[0][0] < cutoff:
-            self._freq_hz_samples.popleft()
-
-        if not self._freq_hz_samples:
-            self.measured_freq_hz.setText('')
-            self.avg_freq_label.setText('-')
-            return
-
-        avg = sum(sample for _, sample in self._freq_hz_samples) / len(self._freq_hz_samples)
-        self.measured_freq_hz.setText(f'{avg:.1f}')
-        self.avg_freq_label.setText(f"{avg:.1f} Hz")
-
     def _to_bool(self, value):
         if isinstance(value, bool):
             return value
@@ -1151,14 +1122,11 @@ class MainWindow(QWidget):
             self.serial = None
         self.latest_dac_code = None
         self.dac_value.setText('')
-        self.measured_freq_hz.setText('')
-        self.measured_freq_raw_hz.setText('')
+        self.saved_dac.setText('')
         self.dac_voltage_main.setText('-')
         self.dac_code_main.setText('Code: -')
         self.dac_percent_main.setText('Full scale: -')
         self.dac_history.clear()
-        self._freq_hz_samples.clear()
-        self.avg_freq_label.setText('-')
         self.connect_btn.setText('Connect')
         self.log_text.append('Disconnected')
 
@@ -1481,12 +1449,9 @@ class MainWindow(QWidget):
             if 'disc_avg_freq_ppb' in obj:
                 self.disc_avg_freq.setText(str(obj.get('disc_avg_freq_ppb')))
             if 'measured_freq_hz' in obj:
-                freq_hz = float(obj.get('measured_freq_hz'))
-                self.measured_freq_raw_hz.setText(f"{freq_hz:.6f}")
-                if freq_hz > 0:
-                    self._update_avg_freq(freq_hz)
+                pass  # measured freq display removed
             if 'measured_freq_error_ppb' in obj:
-                self.measured_freq_error_ppb.setText(f"{float(obj.get('measured_freq_error_ppb')):.3f}")
+                pass  # measured freq display removed
             if 'disc_p_gain' in obj:
                 p_gain = float(obj.get('disc_p_gain'))
                 self.disc_p_gain.setText(f'{p_gain:.6f}')
@@ -1499,6 +1464,8 @@ class MainWindow(QWidget):
             self._handle_step_sample(obj)
             if 'dac_value' in obj:
                 self._update_dac_display(obj.get('dac_value'))
+            if 'saved_dac' in obj:
+                self.saved_dac.setText(str(obj.get('saved_dac')))
             if 'adf1_locked' in obj:
                 adf1_locked = self._to_bool(obj.get('adf1_locked'))
                 self.status_state['adf1_locked'] = adf1_locked

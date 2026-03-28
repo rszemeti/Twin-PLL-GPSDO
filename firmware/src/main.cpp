@@ -1268,11 +1268,12 @@ void loop() {
 
     bool gpsGood = gs.hasFix && gs.ppsValid;
 
-    // The valid observable on this hardware path is the PPS-gated 10 MHz
-    // frequency error. Integrate the per-second ppb error over the averaging
-    // window to obtain an effective phase-drift term in ns for the PI loop.
-    static double freqErrorAccum = 0.0;
-    static uint32_t freqErrorCount = 0;
+    // Rolling ring buffer of per-second frequency-error samples.
+    // The discipliner is called every second with the rolling mean
+    // over the most recent effectiveAvgSecs entries.
+    static double   freqErrRing[DISC_AVERAGE_SECS_MAX];
+    static uint32_t freqErrRingIdx   = 0;
+    static uint32_t freqErrRingCount = 0;
 
     // EFC calibration state machine — suspends normal discipliner while running.
     if (g_efcCalState != EFCCalState::IDLE) {
@@ -1325,8 +1326,8 @@ void loop() {
                     disc.setDACValue(DAC_CENTRE);
                     disc.resetIntegral();
                     disc.setCalActive(false);
-                    freqErrorAccum = 0.0;
-                    freqErrorCount = 0;
+                    freqErrRingIdx = 0;
+                    freqErrRingCount = 0;
                     g_efcCalState = EFCCalState::IDLE;
                 }
                 break;
@@ -1338,29 +1339,41 @@ void loop() {
 
     if (tr.freqValid) {
         status.setMeasuredOCXO(tr.measuredFreq_Hz, tr.freqError_ppb);
-        // Feed every per-second sample into lock detection ring buffer
-        disc.feedLockSample((int32_t)lround(tr.freqError_ppb));
-        freqErrorAccum += tr.freqError_ppb;
-        freqErrorCount++;
+        // Feed DAC snapshot into lock detection ring buffer every second
+        disc.feedLockSample();
 
-        if (freqErrorCount >= g_discAverageSecs) {
-            // Average freq error per second in ppb.
-            // Negative = OCXO slow = discipliner must increase DAC.
-            // discipliner.update() applies negative feedback: _integral -= iGain * error
-            // so a negative error correctly increases the integral.
-            double avgError = freqErrorAccum / (double)freqErrorCount;
-            int32_t avgFreqError_ppb = (int32_t)lround(avgError);
-            disc.update(avgFreqError_ppb, gpsGood);
-            freqErrorAccum = 0.0;
-            freqErrorCount = 0;
-        } else {
-            // Tick the state machine every second so warmup counts PPS pulses,
-            // not averaging windows.  Pass 0 correction — no DAC change.
-            disc.tickWarmup(gpsGood);
+        // Push this second's sample into the rolling ring buffer
+        freqErrRing[freqErrRingIdx] = tr.freqError_ppb;
+        freqErrRingIdx = (freqErrRingIdx + 1) % DISC_AVERAGE_SECS_MAX;
+        if (freqErrRingCount < DISC_AVERAGE_SECS_MAX) freqErrRingCount++;
+
+        // Acquiring: short window (base/4) + full gain for fast pull-in.
+        // Locked:    full window (base)    + gain * LOCKED_RATIO for stability.
+        uint32_t effectiveAvgSecs = (disc.state() == DiscState::LOCKED)
+                                    ? g_discAverageSecs
+                                    : g_discAverageSecs / 4;
+        if (effectiveAvgSecs < 1) effectiveAvgSecs = 1;
+        status.setDiscAvgWindowSecs(effectiveAvgSecs);
+
+        // Always advance warmup/state-machine (do not gate behind window fill)
+        disc.tickWarmup(gpsGood);
+
+        // Compute rolling mean over the most recent effectiveAvgSecs samples
+        uint32_t usable = (freqErrRingCount < effectiveAvgSecs)
+                          ? freqErrRingCount : effectiveAvgSecs;
+        if (usable > 0) {
+            double sum = 0.0;
+            for (uint32_t i = 0; i < usable; i++) {
+                uint32_t idx = (freqErrRingIdx + DISC_AVERAGE_SECS_MAX - 1 - i)
+                               % DISC_AVERAGE_SECS_MAX;
+                sum += freqErrRing[idx];
+            }
+            int32_t avgFreqError_ppb = (int32_t)lround(sum / (double)usable);
+            disc.update(avgFreqError_ppb, gpsGood, effectiveAvgSecs);
         }
     } else if (!gpsGood) {
-        freqErrorAccum = 0.0;
-        freqErrorCount = 0;
+        freqErrRingIdx   = 0;
+        freqErrRingCount = 0;
         disc.update(0, false);
     }
 

@@ -132,16 +132,12 @@ static const uint32_t ADF2_REGS[6] = {
 // How many 1PPS edges to average before first correction
 #define DISC_WARMUP_SECS    0   // 0 = skip warmup (testing); set to e.g. 240 for normal use
 
-// Lock detection — ring buffer of per-second frequency errors.
-// A sample is "good" if |error| < GOOD threshold.
-// Enter lock when buffer is full, good fraction >= ENTER ratio, and |mean| < MEAN_ENTER.
-// Exit lock when good fraction < EXIT ratio or |mean| > MEAN_EXIT.
-#define DISC_LOCK_BUF_SIZE            60      // 60 seconds of per-second samples
-#define DISC_LOCK_GOOD_PPB            500     // ±500 ppb = ±5 Hz at 10 MHz
-#define DISC_LOCK_ENTER_FRAC          0.90f   // 90% good to enter lock
-#define DISC_LOCK_EXIT_FRAC           0.75f   // <75% good to drop lock
-#define DISC_LOCK_MEAN_ENTER_PPB      50      // |mean| < 50 ppb to enter
-#define DISC_LOCK_MEAN_EXIT_PPB       100     // |mean| > 100 ppb to exit
+// Lock detection — ring buffer of per-second DAC snapshots.
+// Lock is declared when the DAC has been stable (small range over
+// the buffer window) and is not railed at min/max.
+#define DISC_LOCK_BUF_SIZE            60      // 60 seconds of DAC history
+#define DISC_LOCK_DAC_RANGE_ENTER     30      // max-min DAC counts to enter lock
+#define DISC_LOCK_DAC_RANGE_EXIT      50      // max-min DAC counts to drop lock
 
 // GPS lock required before disciplining starts
 #define GPS_FIX_REQUIRED    true
@@ -149,7 +145,7 @@ static const uint32_t ADF2_REGS[6] = {
 // Frequency counter gate time (seconds)
 #define FREQ_GATE_SECS      1
 // Number of PPS samples to average before applying PI correction.
-#define DISC_AVERAGE_SECS   8
+#define DISC_AVERAGE_SECS   32
 #define DISC_AVERAGE_SECS_MIN 1
 #define DISC_AVERAGE_SECS_MAX 120
 
@@ -184,7 +180,7 @@ static const uint32_t ADF2_REGS[6] = {
 //   float    i_gain
 #define DISC_CTRL_EEPROM_ADDR  512
 #define DISC_CTRL_MAGIC        0xD15CC710UL
-#define DISC_CTRL_VERSION      1
+#define DISC_CTRL_VERSION      3
 
 // ============================================================
 // ADF4351 register persistence
