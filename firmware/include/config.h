@@ -25,7 +25,7 @@
 #define ADF1_LD_PIN     10   // lock detect
 
 // Set to 1 when ADF4351 #1 hardware is physically installed, else 0.
-#define ADF1_INSTALLED  0
+#define ADF1_INSTALLED  1
 
 // --- ADF4351 #2 (116 MHz) ---
 #define ADF2_CLK_PIN    7
@@ -108,6 +108,9 @@ static const uint32_t ADF2_REGS[6] = {
     0x00D9603C,  // R4
     0x00580005   // R5: same as above
 };
+
+// Nominal OCXO frequency (Hz) — used for count-error arithmetic
+#define OCXO_NOMINAL_HZ     10000000
 
 // ============================================================
 // GPSDO Disciplining Parameters

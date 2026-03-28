@@ -1293,12 +1293,14 @@ void loop() {
 
     bool gpsGood = gs.hasFix && gs.ppsValid;
 
-    // Rolling ring buffer of per-second frequency-error samples.
-    // The discipliner is called every second with the rolling mean
-    // over the most recent effectiveAvgSecs entries.
-    static double   freqErrRing[DISC_AVERAGE_SECS_MAX];
-    static uint32_t freqErrRingIdx   = 0;
-    static uint32_t freqErrRingCount = 0;
+    // Rolling ring buffer of per-second raw count errors (integer Hz).
+    // By accumulating exact integer deviations from nominal and only
+    // converting to ppb at the very end, we eliminate all intermediate
+    // floating-point quantisation — one extra count in 64 s = 0.156 ppb.
+    static int32_t  countErrRing[DISC_AVERAGE_SECS_MAX];
+    static int64_t  countErrSum      = 0;   // running sum of ring contents
+    static uint32_t countErrRingIdx  = 0;
+    static uint32_t countErrRingCount = 0;
 
     // EFC calibration state machine — suspends normal discipliner while running.
     if (g_efcCalState != EFCCalState::IDLE) {
@@ -1351,8 +1353,9 @@ void loop() {
                     disc.setDACValue(DAC_CENTRE);
                     disc.resetIntegral();
                     disc.setCalActive(false);
-                    freqErrRingIdx = 0;
-                    freqErrRingCount = 0;
+                    countErrRingIdx = 0;
+                    countErrRingCount = 0;
+                    countErrSum = 0;
                     g_efcCalState = EFCCalState::IDLE;
                 }
                 break;
@@ -1362,15 +1365,41 @@ void loop() {
         goto skip_discipliner;
     }
 
+    // Advance warmup/state-machine every second regardless of freq measurement.
+    // Warmup depends on GPS validity, not on having a frequency reading.
+    disc.tickWarmup(gpsGood);
+
     if (tr.freqValid) {
         status.setMeasuredOCXO(tr.measuredFreq_Hz, tr.freqError_ppb);
+
+        // Detect ACQUIRING → LOCKED transition and zero the count
+        // accumulator so the locked-mode window starts clean, without
+        // stale pull-in residuals from the acquiring phase.
+        static DiscState prevDiscState = DiscState::WARMUP;
+        DiscState curDiscState = disc.state();
+        if (curDiscState == DiscState::LOCKED && prevDiscState != DiscState::LOCKED) {
+            memset(countErrRing, 0, sizeof(countErrRing));
+            countErrRingIdx   = 0;
+            countErrRingCount = 0;
+            countErrSum       = 0;
+        }
+        prevDiscState = curDiscState;
+
         // Feed DAC snapshot into lock detection ring buffer every second
         disc.feedLockSample();
 
-        // Push this second's sample into the rolling ring buffer
-        freqErrRing[freqErrRingIdx] = tr.freqError_ppb;
-        freqErrRingIdx = (freqErrRingIdx + 1) % DISC_AVERAGE_SECS_MAX;
-        if (freqErrRingCount < DISC_AVERAGE_SECS_MAX) freqErrRingCount++;
+        // Push this second's raw count error into the ring buffer and
+        // maintain the running sum so we never need to re-scan.
+        int32_t thisCountErr = tr.freqError_Hz;  // exact integer
+
+        if (countErrRingCount >= DISC_AVERAGE_SECS_MAX) {
+            // Ring full — subtract the sample we're about to overwrite
+            countErrSum -= countErrRing[countErrRingIdx];
+        }
+        countErrRing[countErrRingIdx] = thisCountErr;
+        countErrSum += thisCountErr;
+        countErrRingIdx = (countErrRingIdx + 1) % DISC_AVERAGE_SECS_MAX;
+        if (countErrRingCount < DISC_AVERAGE_SECS_MAX) countErrRingCount++;
 
         // Acquiring: base window + full gain for fast pull-in.
         // Locked:    window * DISC_AVG_LOCKED_MULTIPLY + gain * LOCKED_RATIO.
@@ -1381,25 +1410,38 @@ void loop() {
         if (effectiveAvgSecs < 1) effectiveAvgSecs = 1;
         status.setDiscAvgWindowSecs(effectiveAvgSecs);
 
-        // Always advance warmup/state-machine (do not gate behind window fill)
-        disc.tickWarmup(gpsGood);
-
-        // Compute rolling mean over the most recent effectiveAvgSecs samples
-        uint32_t usable = (freqErrRingCount < effectiveAvgSecs)
-                          ? freqErrRingCount : effectiveAvgSecs;
+        // Sum the most recent effectiveAvgSecs count errors.
+        // If the ring hasn't filled to effectiveAvgSecs yet, use what we have.
+        uint32_t usable = (countErrRingCount < effectiveAvgSecs)
+                          ? countErrRingCount : effectiveAvgSecs;
         if (usable > 0) {
-            double sum = 0.0;
-            for (uint32_t i = 0; i < usable; i++) {
-                uint32_t idx = (freqErrRingIdx + DISC_AVERAGE_SECS_MAX - 1 - i)
-                               % DISC_AVERAGE_SECS_MAX;
-                sum += freqErrRing[idx];
+            // When usable == countErrRingCount we can use the running sum
+            // directly; otherwise re-sum the most recent 'usable' entries.
+            int64_t windowSum;
+            if (usable == countErrRingCount) {
+                windowSum = countErrSum;
+            } else {
+                windowSum = 0;
+                for (uint32_t i = 0; i < usable; i++) {
+                    uint32_t idx = (countErrRingIdx + DISC_AVERAGE_SECS_MAX - 1 - i)
+                                   % DISC_AVERAGE_SECS_MAX;
+                    windowSum += countErrRing[idx];
+                }
             }
-            int32_t avgFreqError_ppb = (int32_t)lround(sum / (double)usable);
+            // Convert accumulated count error to ppb only at this final step.
+            // ppb = totalCountErr * 1e9 / (nominalHz * windowSecs)
+            //     = totalCountErr * 1e9 / (10e6 * N)
+            //     = totalCountErr * (1000.0 / N)
+            // One extra count in 64 s → 1000/64 = 15.625 ppb ... but the
+            // integrator sees this every second so it accumulates properly.
+            double avgFreqError_ppb = (double)windowSum * (1.0e9 / ((double)OCXO_NOMINAL_HZ * (double)usable));
+            status.setCountErrSum(windowSum);
             disc.update(avgFreqError_ppb, gpsGood, effectiveAvgSecs);
         }
     } else if (!gpsGood) {
-        freqErrRingIdx   = 0;
-        freqErrRingCount = 0;
+        countErrRingIdx   = 0;
+        countErrRingCount = 0;
+        countErrSum       = 0;
         disc.update(0, false);
     }
 

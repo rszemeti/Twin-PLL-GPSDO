@@ -232,6 +232,7 @@ void PIOTimingEngine::processPPS(uint32_t ts_us) {
 
             _result.freqValid       = true;
             _result.freqPulseCount  = edgesThisSec;
+            _result.freqError_Hz    = freqError_Hz;   // exact integer count error
             _result.measuredFreq_Hz = edgesThisSec;   // counts = Hz over 1 PPS window
             _result.freqError_ppb   = error_ppb;
             _result.freqCycleCount  = interval_us;
