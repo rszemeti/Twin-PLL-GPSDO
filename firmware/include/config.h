@@ -118,6 +118,8 @@ static const uint32_t ADF2_REGS[6] = {
 #define DISC_I_GAIN         0.2f     // pull-in gain (acquiring)
 // When LOCKED, i_gain is multiplied by this to reduce loop bandwidth
 #define DISC_I_GAIN_LOCKED_RATIO  0.25f  // 0.2 -> 0.05 when locked
+// When LOCKED, avg window is multiplied by this for longer averaging
+#define DISC_AVG_LOCKED_MULTIPLY  4      // 16 -> 64 when locked
 #define DISC_P_GAIN_MIN     0.0f
 #define DISC_P_GAIN_MAX     10.0f
 #define DISC_I_GAIN_MIN     0.0f
@@ -129,8 +131,10 @@ static const uint32_t ADF2_REGS[6] = {
 #define DAC_MAX             3995
 #define DAC_CENTRE          2048     // nominal centre voltage
 
-// How many 1PPS edges to average before first correction
-#define DISC_WARMUP_SECS    30
+// How many seconds to wait after GPS fix before starting discipline loop
+#define DISC_WARMUP_SECS        30
+#define DISC_WARMUP_SECS_MIN    5
+#define DISC_WARMUP_SECS_MAX    120
 
 // Lock detection — ring buffer of per-second DAC snapshots.
 // Lock is declared when the DAC has been stable (small range over
@@ -145,9 +149,11 @@ static const uint32_t ADF2_REGS[6] = {
 // Frequency counter gate time (seconds)
 #define FREQ_GATE_SECS      1
 // Number of PPS samples to average before applying PI correction.
-#define DISC_AVERAGE_SECS   32
+// This is the acquiring window; locked window = this × DISC_AVG_LOCKED_MULTIPLY.
+#define DISC_AVERAGE_SECS   16
 #define DISC_AVERAGE_SECS_MIN 1
-#define DISC_AVERAGE_SECS_MAX 120
+#define DISC_AVERAGE_SECS_MAX 128
+#define DISC_AVERAGE_SECS_USER_MAX 32   // GUI / user limit (locked = this × 4 = 128)
 
 // ============================================================
 // Status / Alarm
@@ -178,9 +184,10 @@ static const uint32_t ADF2_REGS[6] = {
 //   uint32_t avg_window_s
 //   float    p_gain
 //   float    i_gain
+//   uint32_t warmup_secs        (added in v4)
 #define DISC_CTRL_EEPROM_ADDR  512
 #define DISC_CTRL_MAGIC        0xD15CC710UL
-#define DISC_CTRL_VERSION      3
+#define DISC_CTRL_VERSION      4
 
 // ============================================================
 // ADF4351 register persistence

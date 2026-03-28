@@ -56,6 +56,18 @@ A PIO state machine watches the GPS 1PPS line. When it sees a rising
 edge it fires `PIO0_IRQ_0`, which triggers the edge-counter snapshot
 described below.
 
+**Zero-jitter capture.** Because the PIO hardware reacts to the pin
+within one PIO clock cycle (~6.67 ns at 150 MHz), no CPU interrupt
+latency is involved in the timing-critical capture. A conventional ISR
+would suffer variable delay while the CPU finishes its current
+instruction, saves context, and vectors to the handler — this jitter
+can easily be tens to hundreds of nanoseconds and would directly
+corrupt the edge count. The PIO approach eliminates this entirely: the
+state machine runs independently of the CPU, so the capture is
+cycle-exact regardless of what the CPU is doing. Any count variability
+observed is therefore real oscillator behaviour (thermal drift, EFC
+settling, etc.) or GPS 1PPS edge quality, not measurement artefact.
+
 We trust the GPS 1PPS to *be* one second — GPS 1PPS accuracy is
 typically ±30 ns, which is far better than anything we could measure
 on-chip. So the gate interval is simply one second by definition, and
@@ -123,13 +135,14 @@ effective loop bandwidth constant regardless of the averaging window.
 
 The loop runs in two modes:
 
-- **Acquiring** — uses a short window (`DISC_AVERAGE_SECS / 4`, e.g. 8 s)
+- **Acquiring** — uses the base window (`DISC_AVERAGE_SECS`, default 8 s)
   with the full I gain for fast pull-in.
-- **Locked** — switches to the full window (`DISC_AVERAGE_SECS`, e.g. 32 s)
-  and reduces the gain by `DISC_I_GAIN_LOCKED_RATIO` (currently ×0.25)
-  for stability. The longer window plus the lower gain together narrow
-  the loop bandwidth considerably, so small residual noise doesn't keep
-  jiggling the DAC around.
+- **Locked** — multiplies the window by `DISC_AVG_LOCKED_MULTIPLY`
+  (currently ×4, giving 32 s) and reduces the gain by
+  `DISC_I_GAIN_LOCKED_RATIO` (currently ×0.25). Both changes happen
+  simultaneously when lock is declared. The longer window plus the
+  lower gain together narrow the loop bandwidth considerably, so small
+  residual noise doesn't keep jiggling the DAC around.
 
 If lock is lost the short window and full gain kick back in.
 
@@ -243,11 +256,11 @@ a solid minute before the firmware will claim it's locked.
 
 | What | How |
 |------|-----|
-| PPS edge detection | PIO state machine, ISR fires on rising edge |
+| PPS edge detection | PIO state machine, cycle-exact hardware capture (no ISR jitter) |
 | Frequency measurement | PIO edge count of 10 MHz per 1PPS gate |
 | Control update rate | Every second (rolling average) |
 | Loop type | Pure integrator (no P term), I gain scaled by 1/window |
-| Averaging window | Acquiring: base/4 (8 s), Locked: base (32 s) |
+| Averaging window | Acquiring: base (8 s), Locked: base × 4 (32 s) |
 | DAC persistence | Saved to EEPROM, restored on restart |
 | Lock criteria | 60 s DAC ring buffer: range ≤ 30 counts to enter, > 50 to exit |
-| Gain management | Reduced gain + longer window when locked; full gain + short window when acquiring |
+| Gain management | Acquiring: full gain + base window; Locked: gain ×0.25 + window ×4 (both applied simultaneously) |

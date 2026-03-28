@@ -13,6 +13,7 @@ Discipliner::Discipliner(MCP4725 &dac)
     _pGain(DISC_P_GAIN),
     _iGain(DISC_I_GAIN),
       _calActive(false),
+      _warmupSecs(DISC_WARMUP_SECS),
       _warmupCount(0),
       _lockSecs(0),
       _holdoverSecs(0),
@@ -52,7 +53,7 @@ void Discipliner::tickWarmup(bool gpsValid) {
         if (!_everHadGPS) { _state = DiscState::FREERUN; return; }
         if (!gpsValid) return;
         _warmupCount++;
-        if (_warmupCount >= DISC_WARMUP_SECS) {
+        if (_warmupCount >= _warmupSecs) {
             _state = DiscState::ACQUIRING;
             // Preserve the restored/current DAC operating point across restart.
             _integral = (float)_dacValue;
@@ -114,7 +115,15 @@ void Discipliner::update(int32_t freqError_ppb, bool gpsValid, uint32_t avgWindo
     if (_integral > DAC_MAX) _integral = DAC_MAX;
     if (_integral < DAC_MIN) _integral = DAC_MIN;
 
-    _dacValue = (uint16_t)_integral;
+    // P term: instantaneous correction on top of the integral
+    float pCorrection = _pGain * (float)freqError_ppb;
+    float dacOut = _integral - pCorrection;
+
+    // Clamp final output
+    if (dacOut > DAC_MAX) dacOut = DAC_MAX;
+    if (dacOut < DAC_MIN) dacOut = DAC_MIN;
+
+    _dacValue = (uint16_t)dacOut;
 
     _freqOffset_ppb = ((float)_dacValue - DAC_CENTRE) * 0.1f;
 

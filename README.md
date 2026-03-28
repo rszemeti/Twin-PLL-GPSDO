@@ -3,16 +3,19 @@
 A dual-output GPS-disciplined reference project for Raspberry Pi Pico 2 (RP2350), with:
 - Firmware for GPSDO control + PLL programming
 - A desktop configuration tool (Windows-friendly)
-- Release artifacts (`.uf2` firmware + configuration tool `.exe` + PDF user manual) via GitHub Releases
+- A PCB with 2 ADF4351's, GPS module and all the interface bits
 
 ## Who this is for
-This README is for users who want to **flash**, **run**, and **use** the project without digging through source code first.
+If you need a stable, GPS locked signal source for injection locking 1 or 2 crystal oscillators, or at a push a directly synthesised carrier up to 4.4 GHz.  
 
-## What you get
-- **Output 1 / Output 2 PLL control** from the GUI
+It has the advantage over some other units in that the two outputs are truly independently programmable. If you have a microwave transverter for example that needs injection locking and then a 144 to 28MHz converter, you often find that many units only allow the second output to be a fraction of the primary output, which may not produce thw 116 MHz you need. This unit has 2 synthesisers each of which can be programmed as desired.
+
+## Features
+- **Output 1 / Output 2 PLL**  Truly indpendent of each other
+- **10MHz Auxilliary Output**  For driving other items, eg main radio.
 - **Persistent settings** (ADF register writes are auto-committed to EEPROM)
-- **Live status** (GPS fix/lock, satellites, DOP, alarm, lock states)
-- **Windows configuration tool** with Main/Details/Advamced/About tabs
+- **Live status LEDs** (GPS fix/lock, satellites, DOP, alarm, lock states)
+- **Windows configuration tool** with Main/Details/Tuning/About tabs
 
 ## RF output notes
 - **Two outputs are fully independent**: each PLL output has its own register set and can be tuned separately.

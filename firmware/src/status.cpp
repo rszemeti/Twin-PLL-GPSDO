@@ -223,6 +223,8 @@ void StatusManager::printDebug() {
     doc["disc_avg_freq_ppb"] = _disc.freqError();
     doc["disc_p_gain"] = _disc.pGain();
     doc["disc_i_gain"] = _disc.iGain();
+    doc["disc_i_gain_eff"] = _disc.effectiveIGain();
+    doc["disc_warmup_s"] = _disc.warmupSecs();
     doc["status_interval_ms"] = _statusIntervalMs;
     doc["dac_value"] = _disc.dacValue();
     doc["saved_dac"] = _disc.lastSavedDAC();

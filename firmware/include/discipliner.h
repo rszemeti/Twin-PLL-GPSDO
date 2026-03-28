@@ -42,6 +42,15 @@ public:
     uint32_t  lockSeconds() { return _lockSecs; }
     float     pGain() const { return _pGain; }
     float     iGain() const { return _iGain; }
+    uint32_t  warmupSecs() const { return _warmupSecs; }
+    bool      setWarmupSecs(uint32_t secs) {
+        if (secs < DISC_WARMUP_SECS_MIN || secs > DISC_WARMUP_SECS_MAX) return false;
+        _warmupSecs = secs;
+        return true;
+    }
+    float     effectiveIGain() const {
+        return (_state == DiscState::LOCKED) ? _iGain * DISC_I_GAIN_LOCKED_RATIO : _iGain;
+    }
 
     // Enable/disable DAC usage (useful if no DAC attached)
     void setDACEnabled(bool en) { _dacEnabled = en; }
@@ -64,6 +73,7 @@ private:
     float     _freqOffset_ppb;
     float     _pGain;
     float     _iGain;
+    uint32_t  _warmupSecs;
     uint32_t  _warmupCount;
     uint32_t  _lockSecs;       // seconds continuously locked
     uint32_t  _holdoverSecs;

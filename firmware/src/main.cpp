@@ -84,6 +84,7 @@ struct DiscCtrlBlob {
     uint32_t avgWindowSecs;
     float pGain;
     float iGain;
+    uint32_t warmupSecs;
 };
 
 struct ADFRegsBlob {
@@ -192,6 +193,7 @@ static bool saveDiscCtrlSettings(bool emitJson = true) {
     blob.avgWindowSecs = g_discAverageSecs;
     blob.pGain = disc.pGain();
     blob.iGain = disc.iGain();
+    blob.warmupSecs = disc.warmupSecs();
 
     EEPROM.put(DISC_CTRL_EEPROM_ADDR, blob);
     bool committed = commitEEPROMNow();
@@ -204,6 +206,7 @@ static bool saveDiscCtrlSettings(bool emitJson = true) {
         dj["avg_window_s"] = blob.avgWindowSecs;
         dj["p_gain"] = blob.pGain;
         dj["i_gain"] = blob.iGain;
+        dj["warmup_s"] = blob.warmupSecs;
         serializeJson(dj, Serial);
         Serial.println();
     }
@@ -215,14 +218,16 @@ static bool loadDiscCtrlSettings(bool emitJson = true) {
     EEPROM.get(DISC_CTRL_EEPROM_ADDR, blob);
 
     bool ok = (blob.magic == DISC_CTRL_MAGIC) && (blob.version == DISC_CTRL_VERSION);
-    ok = ok && (blob.avgWindowSecs >= DISC_AVERAGE_SECS_MIN) && (blob.avgWindowSecs <= DISC_AVERAGE_SECS_MAX);
+    ok = ok && (blob.avgWindowSecs >= DISC_AVERAGE_SECS_MIN) && (blob.avgWindowSecs <= DISC_AVERAGE_SECS_USER_MAX);
     ok = ok && disc.setLoopGains(blob.pGain, blob.iGain);
+    ok = ok && disc.setWarmupSecs(blob.warmupSecs);
 
     if (ok) {
         g_discAverageSecs = blob.avgWindowSecs;
     } else {
         g_discAverageSecs = DISC_AVERAGE_SECS;
         disc.setLoopGains(DISC_P_GAIN, DISC_I_GAIN);
+        disc.setWarmupSecs(DISC_WARMUP_SECS);
     }
     status.setDiscAvgWindowSecs(g_discAverageSecs);
 
@@ -233,6 +238,7 @@ static bool loadDiscCtrlSettings(bool emitJson = true) {
         dj["avg_window_s"] = g_discAverageSecs;
         dj["p_gain"] = disc.pGain();
         dj["i_gain"] = disc.iGain();
+        dj["warmup_s"] = disc.warmupSecs();
         serializeJson(dj, Serial);
         Serial.println();
     }
@@ -737,6 +743,7 @@ static void handleCLI(String s) {
                 dj["avg_window_s"] = g_discAverageSecs;
                 dj["p_gain"] = disc.pGain();
                 dj["i_gain"] = disc.iGain();
+                dj["warmup_s"] = disc.warmupSecs();
                 serializeJson(dj, Serial);
                 Serial.println();
             } else if (strcmp(action, "set") == 0) {
@@ -746,7 +753,7 @@ static void handleCLI(String s) {
                 if (doc.containsKey("avg_window_s")) {
                     haveAny = true;
                     int avgIn = doc["avg_window_s"].as<int>();
-                    if (avgIn < DISC_AVERAGE_SECS_MIN || avgIn > DISC_AVERAGE_SECS_MAX) {
+                    if (avgIn < DISC_AVERAGE_SECS_MIN || avgIn > DISC_AVERAGE_SECS_USER_MAX) {
                         sendJsonMessage("error", "avg_window_s out of range");
                         return;
                     }
@@ -763,14 +770,27 @@ static void handleCLI(String s) {
                     haveAny = true;
                     newI = doc["i_gain"].as<float>();
                 }
+
+                uint32_t newWarmup = disc.warmupSecs();
+                if (doc.containsKey("warmup_s")) {
+                    haveAny = true;
+                    int wIn = doc["warmup_s"].as<int>();
+                    if (wIn < DISC_WARMUP_SECS_MIN || wIn > DISC_WARMUP_SECS_MAX) {
+                        sendJsonMessage("error", "warmup_s out of range");
+                        return;
+                    }
+                    newWarmup = (uint32_t)wIn;
+                }
+
                 if (!haveAny) {
-                    sendJsonMessage("error", "disc_ctrl set requires avg_window_s and/or p_gain/i_gain");
+                    sendJsonMessage("error", "disc_ctrl set requires avg_window_s, p_gain, i_gain, and/or warmup_s");
                     return;
                 }
                 if (!disc.setLoopGains(newP, newI)) {
                     sendJsonMessage("error", "p_gain or i_gain out of range");
                     return;
                 }
+                disc.setWarmupSecs(newWarmup);
 
                 g_discAverageSecs = newAvg;
                 status.setDiscAvgWindowSecs(g_discAverageSecs);
@@ -782,6 +802,7 @@ static void handleCLI(String s) {
                 dj["avg_window_s"] = g_discAverageSecs;
                 dj["p_gain"] = disc.pGain();
                 dj["i_gain"] = disc.iGain();
+                dj["warmup_s"] = disc.warmupSecs();
                 dj["persist_requested"] = persist;
                 dj["persisted"] = persist ? saveDiscCtrlSettings(false) : false;
                 serializeJson(dj, Serial);
@@ -795,6 +816,7 @@ static void handleCLI(String s) {
                 dj["avg_window_s"] = g_discAverageSecs;
                 dj["p_gain"] = disc.pGain();
                 dj["i_gain"] = disc.iGain();
+                dj["warmup_s"] = disc.warmupSecs();
                 dj["persisted"] = persisted;
                 serializeJson(dj, Serial);
                 Serial.println();
@@ -807,6 +829,7 @@ static void handleCLI(String s) {
                 dj["avg_window_s"] = g_discAverageSecs;
                 dj["p_gain"] = disc.pGain();
                 dj["i_gain"] = disc.iGain();
+                dj["warmup_s"] = disc.warmupSecs();
                 dj["loaded"] = loaded;
                 serializeJson(dj, Serial);
                 Serial.println();
@@ -908,6 +931,7 @@ static void handleCLI(String s) {
             dj["disc_avg_window_s"] = g_discAverageSecs;
             dj["disc_p_gain"] = disc.pGain();
             dj["disc_i_gain"] = disc.iGain();
+            dj["disc_warmup_s"] = disc.warmupSecs();
             dj["status_interval_ms"] = status.statusIntervalMs();
             bool want_regs = doc["regs"] | false;
             if (want_regs) {
@@ -1348,11 +1372,12 @@ void loop() {
         freqErrRingIdx = (freqErrRingIdx + 1) % DISC_AVERAGE_SECS_MAX;
         if (freqErrRingCount < DISC_AVERAGE_SECS_MAX) freqErrRingCount++;
 
-        // Acquiring: short window (base/4) + full gain for fast pull-in.
-        // Locked:    full window (base)    + gain * LOCKED_RATIO for stability.
+        // Acquiring: base window + full gain for fast pull-in.
+        // Locked:    window * DISC_AVG_LOCKED_MULTIPLY + gain * LOCKED_RATIO.
         uint32_t effectiveAvgSecs = (disc.state() == DiscState::LOCKED)
-                                    ? g_discAverageSecs
-                                    : g_discAverageSecs / 4;
+                                    ? g_discAverageSecs * DISC_AVG_LOCKED_MULTIPLY
+                                    : g_discAverageSecs;
+        if (effectiveAvgSecs > DISC_AVERAGE_SECS_MAX) effectiveAvgSecs = DISC_AVERAGE_SECS_MAX;
         if (effectiveAvgSecs < 1) effectiveAvgSecs = 1;
         status.setDiscAvgWindowSecs(effectiveAvgSecs);
 
