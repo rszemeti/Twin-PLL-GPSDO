@@ -357,9 +357,9 @@ class Signals(QObject):
 
 class MainWindow(QWidget):
     DISC_PRESETS = {
-        'slow':   {'avg_window_s': 32, 'p_gain': 0.0, 'i_gain': 0.10, 'warmup_s': 60},
-        'normal': {'avg_window_s': 16, 'p_gain': 0.0, 'i_gain': 0.20, 'warmup_s': 30},
-        'fast':   {'avg_window_s': 12, 'p_gain': 0.0, 'i_gain': 0.40, 'warmup_s': 10},
+        'slow':   {'avg_window_s': 32, 'p_gain': 0.0, 'i_gain': 2.0, 'warmup_s': 60},
+        'normal': {'avg_window_s': 16, 'p_gain': 0.0, 'i_gain': 5.0, 'warmup_s': 30},
+        'fast':   {'avg_window_s': 12, 'p_gain': 0.0, 'i_gain': 10.0, 'warmup_s': 10},
     }
 
     def __init__(self):
