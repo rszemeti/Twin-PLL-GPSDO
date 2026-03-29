@@ -218,9 +218,9 @@ void StatusManager::printDebug() {
         case DiscState::HOLDOVER:  doc["disc_state"] = "HOLDOVER"; break;
         case DiscState::FREERUN:   doc["disc_state"] = "FREERUN"; break;
     }
-    doc["freq_error_ppb"] = _disc.freqError();
+    doc["disc_count_err"] = _disc.freqError();
     doc["disc_avg_window_s"] = _discAvgWindowSecs;
-    doc["disc_avg_freq_ppb"] = _disc.freqError();
+    doc["disc_avg_count_err"] = _disc.freqError();
     doc["disc_p_gain"] = _disc.pGain();
     doc["disc_i_gain"] = _disc.iGain();
     doc["disc_i_gain_eff"] = _disc.effectiveIGain();

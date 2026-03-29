@@ -1428,15 +1428,9 @@ void loop() {
                     windowSum += countErrRing[idx];
                 }
             }
-            // Convert accumulated count error to ppb only at this final step.
-            // ppb = totalCountErr * 1e9 / (nominalHz * windowSecs)
-            //     = totalCountErr * 1e9 / (10e6 * N)
-            //     = totalCountErr * (1000.0 / N)
-            // One extra count in 64 s → 1000/64 = 15.625 ppb ... but the
-            // integrator sees this every second so it accumulates properly.
-            double avgFreqError_ppb = (double)windowSum * (1.0e9 / ((double)OCXO_NOMINAL_HZ * (double)usable));
+            double avgCountErr = (double)windowSum / (double)usable;
             status.setCountErrSum(windowSum);
-            disc.update(avgFreqError_ppb, gpsGood, effectiveAvgSecs);
+            disc.update(avgCountErr, gpsGood);
         }
     } else if (!gpsGood) {
         countErrRingIdx   = 0;

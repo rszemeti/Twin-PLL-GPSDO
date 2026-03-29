@@ -17,13 +17,9 @@ public:
 
     void begin();
 
-    // Call once per averaging window with the averaged frequency error in ppb.
-    // Positive = OCXO running fast (needs EFC reduced)
-    // avgWindow: number of seconds in the rolling average; I gain is divided
-    //            by this so the per-second call produces the same total
-    //            correction as the old once-per-window call.
-    // Uses double to avoid quantisation dead-zone at sub-ppb residual errors.
-    void update(double freqError_ppb, bool gpsValid, uint32_t avgWindow = 1);
+    // Call once per second with the average count error (Hz) over the
+    // averaging window.  Positive = OCXO running fast (needs EFC reduced).
+    void update(double avgCountError, bool gpsValid);
 
     // Advance warmup/GPS-tracking state every PPS without applying a PI
     // correction.  Call this each second when the accumulation window is
@@ -38,7 +34,7 @@ public:
     DiscState state()       { return _state; }
     uint16_t  dacValue()    { return _dacValue; }
     uint16_t  lastSavedDAC() { return _lastSavedValue; }
-    double    freqError()   { return _lastFreqError; }
+    double    freqError()   { return _lastCountError; }
     float     frequency()   { return _freqOffset_ppb; }
     uint32_t  lockSeconds() { return _lockSecs; }
     float     pGain() const { return _pGain; }
@@ -70,7 +66,7 @@ private:
     DiscState _state;
     uint16_t  _dacValue;
     double    _integral;
-    double    _lastFreqError;
+    double    _lastCountError;
     float     _freqOffset_ppb;
     float     _pGain;
     float     _iGain;

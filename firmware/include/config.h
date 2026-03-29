@@ -116,11 +116,13 @@ static const uint32_t ADF2_REGS[6] = {
 // GPSDO Disciplining Parameters
 // ============================================================
 
-// PI loop time constants (in 1PPS ticks = seconds)
+// PI loop gains — error signal is raw accumulated count error over window.
+// Units: DAC counts correction per count-error per update.
+// A count sum of 640 over 128 s ≈ 1 Hz off ≈ 100 ppb.
 #define DISC_P_GAIN         0.0f     // P not used — pure integrator
-#define DISC_I_GAIN         0.2f     // pull-in gain (acquiring)
+#define DISC_I_GAIN         1.0f     // DAC counts per Hz error per update
 // When LOCKED, i_gain is multiplied by this to reduce loop bandwidth
-#define DISC_I_GAIN_LOCKED_RATIO  0.25f  // 0.2 -> 0.05 when locked
+#define DISC_I_GAIN_LOCKED_RATIO  0.5f   // 1.0 → 0.5 when locked
 // When LOCKED, avg window is multiplied by this for longer averaging
 #define DISC_AVG_LOCKED_MULTIPLY  4      // 16 -> 64 when locked
 #define DISC_P_GAIN_MIN     0.0f
@@ -190,7 +192,7 @@ static const uint32_t ADF2_REGS[6] = {
 //   uint32_t warmup_secs        (added in v4)
 #define DISC_CTRL_EEPROM_ADDR  512
 #define DISC_CTRL_MAGIC        0xD15CC710UL
-#define DISC_CTRL_VERSION      4
+#define DISC_CTRL_VERSION      5
 
 // ============================================================
 // ADF4351 register persistence
