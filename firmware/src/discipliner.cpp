@@ -8,7 +8,7 @@ Discipliner::Discipliner(MCP4725 &dac)
       _state(DiscState::WARMUP),
       _dacValue(DAC_CENTRE),
       _integral(DAC_CENTRE),
-      _lastFreqError(0),
+      _lastCountError(0),
       _freqOffset_ppb(0.0f),
     _pGain(DISC_P_GAIN),
     _iGain(DISC_I_GAIN),
@@ -33,7 +33,7 @@ void Discipliner::begin() {
     } else {
         _dacValue = DAC_CENTRE;
     }
-    _integral = (float)_dacValue;
+    _integral = (double)_dacValue;
     _lastSavedValue = _dacValue;
     _lastSavedMs = millis();
     applyDAC(_dacValue);
@@ -56,12 +56,12 @@ void Discipliner::tickWarmup(bool gpsValid) {
         if (_warmupCount >= _warmupSecs) {
             _state = DiscState::ACQUIRING;
             // Preserve the restored/current DAC operating point across restart.
-            _integral = (float)_dacValue;
+            _integral = (double)_dacValue;
         }
     }
 }
 
-void Discipliner::update(int32_t freqError_ppb, bool gpsValid, uint32_t avgWindow) {
+void Discipliner::update(double avgCountError, bool gpsValid) {
     if (_calActive) return;  // loop suspended during cal
 
     if (gpsValid) {
@@ -97,33 +97,29 @@ void Discipliner::update(int32_t freqError_ppb, bool gpsValid, uint32_t avgWindo
             return;
     }
 
-    _lastFreqError = freqError_ppb;
+    _lastCountError = avgCountError;
 
     // Reduce gain when locked to narrow bandwidth and reduce jitter
-    float effectiveI = (_state == DiscState::LOCKED)
-                       ? _iGain * DISC_I_GAIN_LOCKED_RATIO
-                       : _iGain;
+    double effectiveI = (_state == DiscState::LOCKED)
+                        ? _iGain * DISC_I_GAIN_LOCKED_RATIO
+                        : _iGain;
 
-    // Scale I gain by 1/avgWindow so per-second calls produce the same
-    // total correction as the old once-per-window call.
-    if (avgWindow > 1) effectiveI /= (float)avgWindow;
-
-    // Negative feedback: positive error (OCXO fast) must reduce DAC/integral
-    _integral -= effectiveI * (float)freqError_ppb;
+    // Negative feedback: positive count error (OCXO fast) reduces DAC
+    _integral -= effectiveI * avgCountError;
 
     // Clamp integral
     if (_integral > DAC_MAX) _integral = DAC_MAX;
     if (_integral < DAC_MIN) _integral = DAC_MIN;
 
     // P term: instantaneous correction on top of the integral
-    float pCorrection = _pGain * (float)freqError_ppb;
-    float dacOut = _integral - pCorrection;
+    double pCorrection = _pGain * avgCountError;
+    double dacOut = _integral - pCorrection;
 
     // Clamp final output
     if (dacOut > DAC_MAX) dacOut = DAC_MAX;
     if (dacOut < DAC_MIN) dacOut = DAC_MIN;
 
-    _dacValue = (uint16_t)dacOut;
+    _dacValue = (uint16_t)lround(dacOut);
 
     _freqOffset_ppb = ((float)_dacValue - DAC_CENTRE) * 0.1f;
 
@@ -205,7 +201,7 @@ void Discipliner::applyDAC(uint16_t val) {
 
 void Discipliner::setDACValue(uint16_t val) {
     _dacValue = val;
-    _integral = (float)val;
+    _integral = (double)val;
     applyDAC(val);
 }
 

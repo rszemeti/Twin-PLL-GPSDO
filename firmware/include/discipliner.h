@@ -17,12 +17,9 @@ public:
 
     void begin();
 
-    // Call once per averaging window with the averaged frequency error in ppb.
-    // Positive = OCXO running fast (needs EFC reduced)
-    // avgWindow: number of seconds in the rolling average; I gain is divided
-    //            by this so the per-second call produces the same total
-    //            correction as the old once-per-window call.
-    void update(int32_t freqError_ppb, bool gpsValid, uint32_t avgWindow = 1);
+    // Call once per second with the average count error (Hz) over the
+    // averaging window.  Positive = OCXO running fast (needs EFC reduced).
+    void update(double avgCountError, bool gpsValid);
 
     // Advance warmup/GPS-tracking state every PPS without applying a PI
     // correction.  Call this each second when the accumulation window is
@@ -37,7 +34,7 @@ public:
     DiscState state()       { return _state; }
     uint16_t  dacValue()    { return _dacValue; }
     uint16_t  lastSavedDAC() { return _lastSavedValue; }
-    int32_t   freqError()   { return _lastFreqError; }
+    double    freqError()   { return _lastCountError; }
     float     frequency()   { return _freqOffset_ppb; }
     uint32_t  lockSeconds() { return _lockSecs; }
     float     pGain() const { return _pGain; }
@@ -56,7 +53,7 @@ public:
     void setDACEnabled(bool en) { _dacEnabled = en; }
     // Reset the integral to the current DAC value — prevents windup after
     // any period where the loop was suspended (e.g. EFC cal).
-    void resetIntegral() { _integral = (float)_dacValue; }
+    void resetIntegral() { _integral = (double)_dacValue; }
     // Freeze/unfreeze the PI loop (DAC writes still work, update() is a no-op)
     void setCalActive(bool active) { _calActive = active; }
     bool calActive() const { return _calActive; }
@@ -68,8 +65,8 @@ private:
     MCP4725&  _dac;
     DiscState _state;
     uint16_t  _dacValue;
-    float     _integral;
-    int32_t   _lastFreqError;
+    double    _integral;
+    double    _lastCountError;
     float     _freqOffset_ppb;
     float     _pGain;
     float     _iGain;

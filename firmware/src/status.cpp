@@ -9,7 +9,7 @@ StatusManager::StatusManager(Discipliner &disc, GPSParser &gps,
         _alarmActiveSteady(false), _alarmActiveFlash(false), _alarmFlashOn(false), _lastAlarmFlashMs(0),
         _satsBlinkOn(false), _lastSatsBlinkMs(0),
                 _adf1BlinkOn(false), _adf2BlinkOn(false), _lastAdfBlinkMs(0), _discAvgWindowSecs(DISC_AVERAGE_SECS),
-                                _statusIntervalMs(5000), _measuredFreqHz(0.0), _measuredFreqErrorPpb(0.0) {}
+                                _statusIntervalMs(5000), _measuredFreqHz(0.0), _measuredFreqErrorPpb(0.0), _countErrSum(0) {}
 
 void StatusManager::begin() {
     pinMode(LED_GPS_LOCK,    OUTPUT);
@@ -218,9 +218,9 @@ void StatusManager::printDebug() {
         case DiscState::HOLDOVER:  doc["disc_state"] = "HOLDOVER"; break;
         case DiscState::FREERUN:   doc["disc_state"] = "FREERUN"; break;
     }
-    doc["freq_error_ppb"] = _disc.freqError();
+    doc["disc_count_err"] = _disc.freqError();
     doc["disc_avg_window_s"] = _discAvgWindowSecs;
-    doc["disc_avg_freq_ppb"] = _disc.freqError();
+    doc["disc_avg_count_err"] = _disc.freqError();
     doc["disc_p_gain"] = _disc.pGain();
     doc["disc_i_gain"] = _disc.iGain();
     doc["disc_i_gain_eff"] = _disc.effectiveIGain();
@@ -231,6 +231,7 @@ void StatusManager::printDebug() {
     doc["freq_ppb"] = _disc.frequency();
     doc["measured_freq_hz"] = _measuredFreqHz;
     doc["measured_freq_error_ppb"] = _measuredFreqErrorPpb;
+    doc["count_err_sum"] = (double)_countErrSum;
     doc["adf1_locked"] = _adf1.isLocked();
     doc["adf2_locked"] = _adf2.isLocked();
     doc["alarm_steady"] = _alarmActiveSteady;

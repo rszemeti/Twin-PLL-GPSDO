@@ -13,11 +13,12 @@ In broad strokes:
 
 1. Detect each GPS 1PPS rising edge.
 2. Count how many 10 MHz cycles occurred during that one-second window.
-3. Work out the frequency error in ppb.
-4. Keep a rolling average of the last N seconds of error.
-5. Every second, nudge the DAC (which controls the OCXO EFC voltage) by
-   the integral of the rolling-average error, scaled by 1/N so the loop
-   bandwidth stays constant regardless of the window length.
+3. Compute the integer count error: `edgesThisSec − 10,000,000`.
+4. Keep a rolling ring buffer of the last N seconds of integer count
+   errors and maintain a running sum.
+5. Every second, divide the windowed sum by N to get the average count
+   error in Hz (as a double), and feed that to the integrator which
+   nudges the DAC (OCXO EFC voltage).
 6. Only declare "locked" once the DAC output has been stable (not moving
    much) for long enough to be credible.
 
@@ -30,11 +31,14 @@ flowchart TD
     EDGE --> PPS
 
     PPS --> OBS[Per-second observables
-pulse count · measured Hz · error ppb]
+pulse count · integer count error Hz]
 
-    OBS --> AVG[Multi-second averaging]
+    OBS --> RING[Integer ring buffer
+running sum of count errors]
+    RING --> AVG[Average count error
+windowSum / N  →  double Hz]
     AVG --> INT[Integrator
-DAC -= gain × avg error]
+DAC -= gain × avg count error]
     INT --> DAC[DAC / EFC]
     DAC --> OCXO
 
@@ -97,10 +101,14 @@ the two views are mathematically identical.
 > its X register on every 10 MHz rising edge, and the PPS ISR snapshots
 > X each second to compute the per-second delta
 > (`edgesThisSec = prevX − currentX`). The one-second residual is then
-> just `edgesThisSec − 10,000,000`. This is equivalent to the virtual
-> counter model above but avoids the need for a 64-bit running total
-> and any concern about wrap. The multi-second average is the sum of
-> these per-second residuals divided by the window length.
+> just `edgesThisSec − 10,000,000`. These integer residuals are stored
+> in a ring buffer with a windowed `int64_t` running sum (bounded by
+> window size × max per-second error, not an unbounded accumulation).
+> The average over the window (`sum / N` as a `double`) is what feeds
+> the integrator. The per-second unsigned subtraction of X handles
+> 32-bit wrap correctly, and the windowed sum avoids any concern about
+> unbounded growth, while preserving sub-ppb precision through the
+> entire path.
 
 From the per-second edge count, the frequency error is simply:
 
@@ -109,7 +117,9 @@ error_{Hz} = N_{edges} - 10{,}000{,}000
 $$
 
 Because the PPS gate *is* one second, the edge count *is* the frequency
-in Hz — no division required. The error in ppb is just that scaled up:
+in Hz — no division required. The control loop works entirely in Hz
+(integer count errors averaged to a `double`). A ppb value is also
+computed for telemetry display but is **not** part of the control path:
 
 $$
 error_{ppb} = \frac{error_{Hz}}{10{,}000{,}000} \cdot 10^9 = error_{Hz} \times 100
@@ -126,23 +136,37 @@ rolling average, the integrator, or the lock detector.
 
 ## 3) The control loop
 
-The firmware maintains a rolling ring buffer of per-second frequency
-error samples. Every second, it computes the mean over the most recent
-N samples and passes that to the discipliner. The discipliner is a pure
-integrator — there is no proportional term. It adjusts the DAC by
-`i_gain / N × avg_error` each second, where the division by N keeps the
-effective loop bandwidth constant regardless of the averaging window.
+The firmware maintains a rolling ring buffer of per-second **integer**
+count errors (`edgesThisSec − 10,000,000`). A running `int64_t` sum
+traces the ring so re-scanning is never needed. Every second, the
+windowed sum is divided by the number of samples to produce an average
+count error in Hz (as a `double`), and that value is passed to the
+discipliner.
+
+By keeping everything as exact integers until the final division, no
+floating-point quantisation can create a dead zone — a single extra
+edge in 128 seconds (0.0078 Hz) is faithfully represented.
+
+The discipliner is a pure integrator (no proportional term). It adjusts
+the DAC by `i_gain × avg_count_error` each second, where the averaging
+window acts as a jitter filter without affecting the integrator's gain
+units (DAC counts per Hz-error per update).
 
 The loop runs in two modes:
 
-- **Acquiring** — uses the base window (`DISC_AVERAGE_SECS`, default 8 s)
-  with the full I gain for fast pull-in.
+- **Acquiring** — uses the base window (`DISC_AVERAGE_SECS`, default
+  16 s) with the full I gain (`DISC_I_GAIN`, default 5.0) for fast
+  pull-in.
 - **Locked** — multiplies the window by `DISC_AVG_LOCKED_MULTIPLY`
-  (currently ×4, giving 32 s) and reduces the gain by
-  `DISC_I_GAIN_LOCKED_RATIO` (currently ×0.25). Both changes happen
-  simultaneously when lock is declared. The longer window plus the
-  lower gain together narrow the loop bandwidth considerably, so small
-  residual noise doesn't keep jiggling the DAC around.
+  (currently ×4, giving 64 s) and reduces the gain by
+  `DISC_I_GAIN_LOCKED_RATIO` (currently ×0.5, giving effective 2.5).
+  Both changes happen simultaneously when lock is declared. The longer
+  window plus the lower gain together narrow the loop bandwidth
+  considerably, so normal 1PPS jitter doesn't keep jiggling the DAC.
+
+When transitioning from ACQUIRING to LOCKED, the ring buffer and running
+sum are zeroed so the locked-mode window starts clean without stale
+pull-in residuals.
 
 If lock is lost the short window and full gain kick back in.
 
@@ -174,8 +198,9 @@ The firmware sends two kinds of JSON messages over the serial link.
 
 **Status** (periodic) — carries the full system snapshot: GPS fix,
 DAC value, ADF lock-detect states, discipliner state, plus averaging
-visibility fields (`disc_avg_window_s`, `disc_avg_freq_ppb`) so the
-monitor app can show what the loop is doing.
+visibility fields (`disc_avg_window_s`, `disc_count_err`,
+`disc_avg_count_err`, `count_err_sum`) so the monitor app can show
+what the loop is doing.
 
 ---
 
@@ -258,9 +283,12 @@ a solid minute before the firmware will claim it's locked.
 |------|-----|
 | PPS edge detection | PIO state machine, cycle-exact hardware capture (no ISR jitter) |
 | Frequency measurement | PIO edge count of 10 MHz per 1PPS gate |
+| Error signal | Integer count error per second → ring buffer → average (double Hz) |
 | Control update rate | Every second (rolling average) |
-| Loop type | Pure integrator (no P term), I gain scaled by 1/window |
-| Averaging window | Acquiring: base (8 s), Locked: base × 4 (32 s) |
+| Loop type | Pure integrator (no P term), gain in DAC counts per Hz-error |
+| I gain | Acquiring: 5.0, Locked: 2.5 (×0.5 ratio) |
+| Averaging window | Acquiring: 16 s, Locked: 16 × 4 = 64 s |
 | DAC persistence | Saved to EEPROM, restored on restart |
 | Lock criteria | 60 s DAC ring buffer: range ≤ 30 counts to enter, > 50 to exit |
-| Gain management | Acquiring: full gain + base window; Locked: gain ×0.25 + window ×4 (both applied simultaneously) |
+| Gain management | Acquiring: full gain + base window; Locked: gain ×0.5 + window ×4 (both applied simultaneously) |
+| Zero-on-lock-entry | Ring buffer cleared on ACQUIRING → LOCKED transition |

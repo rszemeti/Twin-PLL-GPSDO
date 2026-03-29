@@ -357,9 +357,9 @@ class Signals(QObject):
 
 class MainWindow(QWidget):
     DISC_PRESETS = {
-        'slow':   {'avg_window_s': 32, 'p_gain': 0.0, 'i_gain': 0.10, 'warmup_s': 60},
-        'normal': {'avg_window_s': 16, 'p_gain': 0.0, 'i_gain': 0.20, 'warmup_s': 30},
-        'fast':   {'avg_window_s': 12, 'p_gain': 0.0, 'i_gain': 0.40, 'warmup_s': 10},
+        'slow':   {'avg_window_s': 32, 'p_gain': 0.0, 'i_gain': 2.0, 'warmup_s': 60},
+        'normal': {'avg_window_s': 16, 'p_gain': 0.0, 'i_gain': 5.0, 'warmup_s': 30},
+        'fast':   {'avg_window_s': 12, 'p_gain': 0.0, 'i_gain': 10.0, 'warmup_s': 10},
     }
 
     def __init__(self):
@@ -471,7 +471,7 @@ class MainWindow(QWidget):
         grid.addWidget(QLabel('Disc State'), 8, 0); grid.addWidget(self.disc_state, 8, 1)
         grid.addWidget(QLabel('Freq error (ppb)'), 9, 0); grid.addWidget(self.phase_error, 9, 1)
         grid.addWidget(QLabel('Disc avg window (s)'), 10, 0); grid.addWidget(self.disc_avg_window, 10, 1)
-        grid.addWidget(QLabel('Disc avg freq err (ppb)'), 11, 0); grid.addWidget(self.disc_avg_freq, 11, 1)
+        grid.addWidget(QLabel('Disc avg count err (Hz)'), 11, 0); grid.addWidget(self.disc_avg_freq, 11, 1)
         grid.addWidget(QLabel('DAC Value'), 12, 0); grid.addWidget(self.dac_value, 12, 1)
         grid.addWidget(QLabel('Last Saved DAC'), 13, 0); grid.addWidget(self.saved_dac, 13, 1)
         grid.addWidget(QLabel('adf1_locked'), 14, 0); grid.addWidget(self.adf1_locked, 14, 1)
@@ -726,6 +726,14 @@ class MainWindow(QWidget):
         self.tuning_avg_label = QLabel('-')
         self.tuning_avg_label.setStyleSheet('font-size: 14px; font-weight: 600; color: #79c0ff;')
         tuning_grid.addWidget(self.tuning_avg_label, 2, 1)
+        tuning_grid.addWidget(QLabel('Avg count err:'), 2, 2)
+        self.tuning_avg_count_err_label = QLabel('-')
+        self.tuning_avg_count_err_label.setStyleSheet('font-size: 14px; font-weight: 600; color: #79c0ff;')
+        tuning_grid.addWidget(self.tuning_avg_count_err_label, 2, 3)
+        tuning_grid.addWidget(QLabel('Count err sum:'), 3, 0)
+        self.tuning_count_err_sum_label = QLabel('-')
+        self.tuning_count_err_sum_label.setStyleSheet('font-size: 14px; font-weight: 600; color: #79c0ff;')
+        tuning_grid.addWidget(self.tuning_count_err_sum_label, 3, 1)
         tuning_grid.setColumnStretch(4, 1)
 
         # Advanced tab (controls and tooling)
@@ -1124,6 +1132,8 @@ class MainWindow(QWidget):
         self.tuning_igain_label.setText('-')
         self.tuning_pgain_label.setText('-')
         self.tuning_avg_label.setText('-')
+        self.tuning_avg_count_err_label.setText('-')
+        self.tuning_count_err_sum_label.setText('-')
 
         self.connect_btn.setText('Connect')
         self.log_text.append('Disconnected')
@@ -1348,8 +1358,13 @@ class MainWindow(QWidget):
                 avg_eff = obj.get('disc_avg_window_s')
                 self.disc_avg_window.setText(str(avg_eff))
                 self.tuning_avg_label.setText(f'{avg_eff} s')
-            if 'disc_avg_freq_ppb' in obj:
-                self.disc_avg_freq.setText(str(obj.get('disc_avg_freq_ppb')))
+            if 'disc_avg_count_err' in obj:
+                avg_ce = obj.get('disc_avg_count_err')
+                self.disc_avg_freq.setText(f'{avg_ce}')
+                self.tuning_avg_count_err_label.setText(f'{float(avg_ce):.6f}')
+            if 'count_err_sum' in obj:
+                ces = obj.get('count_err_sum')
+                self.tuning_count_err_sum_label.setText(str(int(ces)))
             if 'measured_freq_hz' in obj:
                 pass  # measured freq display removed
             if 'measured_freq_error_ppb' in obj:

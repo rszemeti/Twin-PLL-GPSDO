@@ -27,6 +27,7 @@ struct TimingResult {
     // OCXO frequency measurement
     bool     freqValid;
     uint32_t freqPulseCount;     // number of 10MHz edges in the last PPS interval
+    int32_t  freqError_Hz;       // raw count error (edges - nominal), exact integer
     double   measuredFreq_Hz;    // measured OCXO frequency
     double   freqError_ppb;      // error in parts per billion
     uint32_t freqCycleCount;     // PPS interval in microseconds used for freq calc

@@ -12,6 +12,7 @@ public:
     void update();          // call every ~500ms from core0
     void printDebug();      // verbose serial output
     void setDiscAvgWindowSecs(uint32_t secs) { _discAvgWindowSecs = secs; }
+    void setCountErrSum(int64_t sum) { _countErrSum = sum; }
     void setMeasuredOCXO(double measuredHz, double freqErrorPpb) {
         _measuredFreqHz = measuredHz;
         _measuredFreqErrorPpb = freqErrorPpb;
@@ -48,6 +49,7 @@ private:
     uint32_t _statusIntervalMs;
     double   _measuredFreqHz;
     double   _measuredFreqErrorPpb;
+    int64_t  _countErrSum;
 
     void setLED(uint8_t pin, bool on);
     // (implementation in source)
