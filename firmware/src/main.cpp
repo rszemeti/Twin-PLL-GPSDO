@@ -206,7 +206,7 @@ static bool saveDiscCtrlSettings(bool emitJson = true) {
     bool committed = commitEEPROMNow();
 
     if (emitJson) {
-        StaticJsonDocument<224> dj;
+        StaticJsonDocument<256> dj;
         dj["status"] = committed ? "info" : "error";
         dj["event"] = "saved_disc_ctrl";
         dj["committed"] = committed;
@@ -214,6 +214,8 @@ static bool saveDiscCtrlSettings(bool emitJson = true) {
         dj["p_gain"] = blob.pGain;
         dj["i_gain"] = blob.iGain;
         dj["warmup_s"] = blob.warmupSecs;
+        dj["adf1_enabled"] = g_adf1Enabled;
+        dj["adf2_enabled"] = g_adf2Enabled;
         serializeJson(dj, Serial);
         Serial.println();
     }
