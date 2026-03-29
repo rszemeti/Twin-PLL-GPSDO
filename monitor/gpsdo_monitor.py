@@ -573,8 +573,8 @@ class MainWindow(QWidget):
         self._add_led_widget(leds_grid, 0, 1, 'gps_lock', 'GPS Lock')
         self._add_led_widget(leds_grid, 0, 2, 'disciplined', 'Disciplined')
         self._add_led_widget(leds_grid, 1, 2, 'alarm', 'Alarm')
-        self._add_led_widget(leds_grid, 1, 0, 'adf1_lock', 'ADF1 Lock')
-        self._add_led_widget(leds_grid, 1, 1, 'adf2_lock', 'ADF2 Lock')
+        self._add_led_widget(leds_grid, 1, 0, 'adf1_lock', 'PLL1 Lock')
+        self._add_led_widget(leds_grid, 1, 1, 'adf2_lock', 'PLL2 Lock')
         leds_box.setLayout(leds_grid)
 
         # PLL quick-control cards (main tab)
