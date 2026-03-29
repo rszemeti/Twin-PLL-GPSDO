@@ -114,7 +114,9 @@ error_{Hz} = N_{edges} - 10{,}000{,}000
 $$
 
 Because the PPS gate *is* one second, the edge count *is* the frequency
-in Hz — no division required. The error in ppb is just that scaled up:
+in Hz — no division required. The control loop works entirely in Hz
+(integer count errors averaged to a `double`). A ppb value is also
+computed for telemetry display but is **not** part of the control path:
 
 $$
 error_{ppb} = \frac{error_{Hz}}{10{,}000{,}000} \cdot 10^9 = error_{Hz} \times 100
