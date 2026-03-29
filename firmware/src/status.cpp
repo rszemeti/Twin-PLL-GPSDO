@@ -9,7 +9,8 @@ StatusManager::StatusManager(Discipliner &disc, GPSParser &gps,
         _alarmActiveSteady(false), _alarmActiveFlash(false), _alarmFlashOn(false), _lastAlarmFlashMs(0),
         _satsBlinkOn(false), _lastSatsBlinkMs(0),
                 _adf1BlinkOn(false), _adf2BlinkOn(false), _lastAdfBlinkMs(0), _discAvgWindowSecs(DISC_AVERAGE_SECS),
-                                _statusIntervalMs(5000), _measuredFreqHz(0.0), _measuredFreqErrorPpb(0.0), _countErrSum(0) {}
+                _statusIntervalMs(5000), _measuredFreqHz(0.0), _measuredFreqErrorPpb(0.0), _countErrSum(0),
+                _adf1Enabled(true), _adf2Enabled(true) {}
 
 void StatusManager::begin() {
     pinMode(LED_GPS_LOCK,    OUTPUT);
@@ -87,28 +88,28 @@ void StatusManager::update() {
         _disc.state() == DiscState::HOLDOVER);
 
     // ADF4351 lock detect with timeout
-    bool adf1locked = _adf1.isLocked();
-    bool adf2locked = _adf2.isLocked();
-    // Update ADF LEDs (solid when locked, blink when unlocked)
+    bool adf1locked = _adf1Enabled ? _adf1.isLocked() : true;
+    bool adf2locked = _adf2Enabled ? _adf2.isLocked() : true;
+    // Update ADF LEDs (solid when locked, blink when unlocked, off when disabled)
     updateAdfLEDs(adf1locked, adf2locked);
 
     uint32_t now = millis();
 
-    if (!adf1locked) {
-        if (_adf1LostMs == 0) _adf1LostMs = now;
-    } else {
+    if (!_adf1Enabled || adf1locked) {
         _adf1LostMs = 0;
-    }
-
-    if (!adf2locked) {
-        if (_adf2LostMs == 0) _adf2LostMs = now;
     } else {
-        _adf2LostMs = 0;
+        if (_adf1LostMs == 0) _adf1LostMs = now;
     }
 
-    bool adf1alarm = _adf1LostMs &&
+    if (!_adf2Enabled || adf2locked) {
+        _adf2LostMs = 0;
+    } else {
+        if (_adf2LostMs == 0) _adf2LostMs = now;
+    }
+
+    bool adf1alarm = _adf1Enabled && _adf1LostMs &&
         (now - _adf1LostMs) > (ALARM_LOCK_TIMEOUT * 1000UL);
-    bool adf2alarm = _adf2LostMs &&
+    bool adf2alarm = _adf2Enabled && _adf2LostMs &&
         (now - _adf2LostMs) > (ALARM_LOCK_TIMEOUT * 1000UL);
     bool gpsAlarm  = gs.ppsValid == false &&
         _disc.state() != DiscState::FREERUN;
@@ -153,7 +154,9 @@ void StatusManager::updateAdfLEDs(bool adf1locked, bool adf2locked) {
     const uint32_t now = millis();
     const uint32_t blinkInterval = 500; // ms
 
-    if (adf1locked) {
+    if (!_adf1Enabled) {
+        setLED(LED_ADF1_LOCK, false);
+    } else if (adf1locked) {
         _adf1BlinkOn = false;
         setLED(LED_ADF1_LOCK, true);
     } else {
@@ -164,7 +167,9 @@ void StatusManager::updateAdfLEDs(bool adf1locked, bool adf2locked) {
         setLED(LED_ADF1_LOCK, _adf1BlinkOn);
     }
 
-    if (adf2locked) {
+    if (!_adf2Enabled) {
+        setLED(LED_ADF2_LOCK, false);
+    } else if (adf2locked) {
         _adf2BlinkOn = false;
         setLED(LED_ADF2_LOCK, true);
     } else {
@@ -234,6 +239,8 @@ void StatusManager::printDebug() {
     doc["count_err_sum"] = (double)_countErrSum;
     doc["adf1_locked"] = _adf1.isLocked();
     doc["adf2_locked"] = _adf2.isLocked();
+    doc["adf1_enabled"] = _adf1Enabled;
+    doc["adf2_enabled"] = _adf2Enabled;
     doc["alarm_steady"] = _alarmActiveSteady;
     doc["alarm_flash"] = _alarmActiveFlash;
     serializeJson(doc, Serial);

@@ -24,8 +24,8 @@
 #define ADF1_CE_PIN     12
 #define ADF1_LD_PIN     10   // lock detect
 
-// Set to 1 when ADF4351 #1 hardware is physically installed, else 0.
-#define ADF1_INSTALLED  1
+// Default PLL1 enable state (runtime-configurable via pll_ctrl command).
+#define ADF1_ENABLED_DEFAULT  1
 
 // --- ADF4351 #2 (116 MHz) ---
 #define ADF2_CLK_PIN    7
@@ -34,8 +34,8 @@
 #define ADF2_CE_PIN     13
 #define ADF2_LD_PIN     11   // lock detect
 
-// Set to 1 when ADF4351 #2 hardware is physically installed, else 0.
-#define ADF2_INSTALLED  0
+// Default PLL2 enable state (runtime-configurable via pll_ctrl command).
+#define ADF2_ENABLED_DEFAULT  0
 
 // --- I2C for MCP4725 DAC (OCXO EFC) ---
 #define I2C_SDA_PIN     14
@@ -190,9 +190,11 @@ static const uint32_t ADF2_REGS[6] = {
 //   float    p_gain
 //   float    i_gain
 //   uint32_t warmup_secs        (added in v4)
+//   uint8_t  adf1_enabled       (added in v6)
+//   uint8_t  adf2_enabled       (added in v6)
 #define DISC_CTRL_EEPROM_ADDR  512
 #define DISC_CTRL_MAGIC        0xD15CC710UL
-#define DISC_CTRL_VERSION      5
+#define DISC_CTRL_VERSION      6
 
 // ============================================================
 // ADF4351 register persistence

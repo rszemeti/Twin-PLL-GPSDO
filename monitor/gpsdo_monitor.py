@@ -397,6 +397,8 @@ class MainWindow(QWidget):
             'disc_state': '',
             'adf1_locked': False,
             'adf2_locked': False,
+            'adf1_enabled': True,
+            'adf2_enabled': True,
             'alarm_steady': False,
             'alarm_flash': False,
         }
@@ -578,6 +580,10 @@ class MainWindow(QWidget):
         # PLL quick-control cards (main tab)
         pll1_box = QGroupBox('PLL1')
         pll1_layout = QVBoxLayout()
+        self.pll1_enable_cb = QCheckBox('Enabled')
+        self.pll1_enable_cb.setChecked(True)
+        self.pll1_enable_cb.toggled.connect(lambda en: self._send_pll_enable(1, en))
+        pll1_layout.addWidget(self.pll1_enable_cb)
         pll1_header = QHBoxLayout()
         pll1_header.addStretch(1)
         self.pll1_mode_main = QLabel('-')
@@ -601,6 +607,10 @@ class MainWindow(QWidget):
 
         pll2_box = QGroupBox('PLL2')
         pll2_layout = QVBoxLayout()
+        self.pll2_enable_cb = QCheckBox('Enabled')
+        self.pll2_enable_cb.setChecked(True)
+        self.pll2_enable_cb.toggled.connect(lambda en: self._send_pll_enable(2, en))
+        pll2_layout.addWidget(self.pll2_enable_cb)
         pll2_header = QHBoxLayout()
         pll2_header.addStretch(1)
         self.pll2_mode_main = QLabel('-')
@@ -988,6 +998,8 @@ class MainWindow(QWidget):
 
         adf1_locked = self.status_state['adf1_locked']
         adf2_locked = self.status_state['adf2_locked']
+        adf1_enabled = self.status_state['adf1_enabled']
+        adf2_enabled = self.status_state['adf2_enabled']
 
         sats = int(self.status_state['sats'])
         sats_used = sats >= 4 and self.status_state['gps_fix']
@@ -1002,8 +1014,8 @@ class MainWindow(QWidget):
         self._set_led('gps_fix_led', True, '#32d74b' if gps_fix else '#ff453a')
         self._set_led('gps_lock', True, '#32d74b' if gps_lock else '#ff453a')
         self._set_led('disciplined', disciplined, '#0a84ff')
-        self._set_led('adf1_lock', True, '#32d74b' if adf1_locked else '#ff453a')
-        self._set_led('adf2_lock', True, '#32d74b' if adf2_locked else '#ff453a')
+        self._set_led('adf1_lock', adf1_enabled, '#32d74b' if adf1_locked else '#ff453a')
+        self._set_led('adf2_lock', adf2_enabled, '#32d74b' if adf2_locked else '#ff453a')
         self._set_led('alarm', alarm_on, '#ff453a')
 
     def _update_tuning_state(self, state):
@@ -1121,6 +1133,8 @@ class MainWindow(QWidget):
             'disc_state': '',
             'adf1_locked': False,
             'adf2_locked': False,
+            'adf1_enabled': True,
+            'adf2_enabled': True,
             'alarm_steady': False,
             'alarm_flash': False,
         }
@@ -1403,6 +1417,20 @@ class MainWindow(QWidget):
                 self.status_state['alarm_steady'] = self._to_bool(obj.get('alarm_steady'))
             if 'alarm_flash' in obj:
                 self.status_state['alarm_flash'] = self._to_bool(obj.get('alarm_flash'))
+            if 'adf1_enabled' in obj:
+                en = self._to_bool(obj.get('adf1_enabled'))
+                self.status_state['adf1_enabled'] = en
+                self.pll1_enable_cb.blockSignals(True)
+                self.pll1_enable_cb.setChecked(en)
+                self.pll1_enable_cb.blockSignals(False)
+                self._update_pll_widgets_enabled(1, en)
+            if 'adf2_enabled' in obj:
+                en = self._to_bool(obj.get('adf2_enabled'))
+                self.status_state['adf2_enabled'] = en
+                self.pll2_enable_cb.blockSignals(True)
+                self.pll2_enable_cb.setChecked(en)
+                self.pll2_enable_cb.blockSignals(False)
+                self._update_pll_widgets_enabled(2, en)
 
             self._update_virtual_leds()
 
@@ -1493,6 +1521,35 @@ class MainWindow(QWidget):
 
     def open_set_pll2_dialog(self):
         self._open_set_pll_dialog('PLL2', 'adf2', 116.0)
+
+    def _send_pll_enable(self, pll_num, enabled):
+        """Send pll_ctrl set command to enable/disable a PLL at runtime."""
+        if not self.serial or not self.serial.is_open:
+            self.log_text.append('Not connected — cannot change PLL enable')
+            # Revert checkbox to current state
+            cb = self.pll1_enable_cb if pll_num == 1 else self.pll2_enable_cb
+            key = f'adf{pll_num}_enabled'
+            cb.blockSignals(True)
+            cb.setChecked(self.status_state[key])
+            cb.blockSignals(False)
+            return
+        key = f'adf{pll_num}_enabled'
+        cmd = json.dumps({'cmd': 'pll_ctrl', 'action': 'set', key: enabled})
+        self._serial_write_line(cmd)
+        self.log_text.append(f'PLL{pll_num} {"enabled" if enabled else "disabled"}')
+
+    def _update_pll_widgets_enabled(self, pll_num, enabled):
+        """Grey out PLL controls when disabled."""
+        if pll_num == 1:
+            self.set_pll1_btn.setEnabled(enabled)
+            self.set_pll1_regs_btn.setEnabled(enabled)
+            self.pll1_freq_main.setStyleSheet(
+                f'font-size: 16px; font-weight: 700; color: {"#79c0ff" if enabled else "#555"};')
+        else:
+            self.set_pll2_btn.setEnabled(enabled)
+            self.set_pll2_regs_btn.setEnabled(enabled)
+            self.pll2_freq_main.setStyleSheet(
+                f'font-size: 16px; font-weight: 700; color: {"#79c0ff" if enabled else "#555"};')
 
     def open_set_pll1_registers_dialog(self):
         self._open_set_pll_registers_dialog('PLL1', 'adf1')
@@ -1698,6 +1755,8 @@ class MainWindow(QWidget):
             },
             'adf1_regs': list(self.latest_regs['adf1']),
             'adf2_regs': list(self.latest_regs['adf2']),
+            'adf1_enabled': self.status_state['adf1_enabled'],
+            'adf2_enabled': self.status_state['adf2_enabled'],
         }
 
         path, _ = QFileDialog.getSaveFileName(
@@ -1747,10 +1806,13 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, 'Invalid Settings File', '\n'.join(errors))
             return
 
+        adf1_en = data.get('adf1_enabled', '?')
+        adf2_en = data.get('adf2_enabled', '?')
         reply = QMessageBox.question(
             self, 'Restore Settings',
             f'Restore all settings from:\n{path}\n\n'
             f'Discipliner: avg={dc["avg_window_s"]}s, P={dc["p_gain"]}, I={dc["i_gain"]}, warmup={dc["warmup_s"]}s\n'
+            f'PLL1 enabled: {adf1_en}   PLL2 enabled: {adf2_en}\n'
             f'ADF1 regs: {[hex(r) for r in adf1]}\n'
             f'ADF2 regs: {[hex(r) for r in adf2]}\n\n'
             'This will overwrite the current device settings. Continue?',
@@ -1785,6 +1847,16 @@ class MainWindow(QWidget):
         })
         self._serial_write_line(adf2_cmd)
         self.log_text.append('Restored ADF2 registers')
+
+        # Restore PLL enable state if present in the settings file
+        if 'adf1_enabled' in data or 'adf2_enabled' in data:
+            pll_cmd = {'cmd': 'pll_ctrl', 'action': 'set'}
+            if 'adf1_enabled' in data:
+                pll_cmd['adf1_enabled'] = bool(data['adf1_enabled'])
+            if 'adf2_enabled' in data:
+                pll_cmd['adf2_enabled'] = bool(data['adf2_enabled'])
+            self._serial_write_line(json.dumps(pll_cmd))
+            self.log_text.append('Restored PLL enable state')
 
         self.settings_summary_label.setText(f'Restored from: {path}')
         self.log_text.append(f'All settings restored from {path}')

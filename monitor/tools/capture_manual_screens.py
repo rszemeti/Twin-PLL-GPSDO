@@ -79,6 +79,8 @@ def _seed_demo_data(window):
             'saved_dac': 2560,
             'adf1_locked': True,
             'adf2_locked': True,
+            'adf1_enabled': True,
+            'adf2_enabled': True,
             'alarm_steady': False,
             'alarm_flash': False,
             'status_interval_ms': 5000,

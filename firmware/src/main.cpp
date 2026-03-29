@@ -64,6 +64,8 @@ static bool adfFsReady = false;
 static bool adf1PersistDirty = false;
 static bool adf2PersistDirty = false;
 static uint32_t g_discAverageSecs = DISC_AVERAGE_SECS;
+static bool g_adf1Enabled = (ADF1_ENABLED_DEFAULT != 0);
+static bool g_adf2Enabled = (ADF2_ENABLED_DEFAULT != 0);
 
 // ── EFC calibration state machine ─────────────────────────────────────────
 enum class EFCCalState { IDLE, SETTLE_LOW, READ_LOW, SETTLE_HIGH, READ_HIGH };
@@ -85,6 +87,9 @@ struct DiscCtrlBlob {
     float pGain;
     float iGain;
     uint32_t warmupSecs;
+    uint8_t adf1Enabled;    // v6
+    uint8_t adf2Enabled;    // v6
+    uint8_t _pad[2];
 };
 
 struct ADFRegsBlob {
@@ -194,6 +199,8 @@ static bool saveDiscCtrlSettings(bool emitJson = true) {
     blob.pGain = disc.pGain();
     blob.iGain = disc.iGain();
     blob.warmupSecs = disc.warmupSecs();
+    blob.adf1Enabled = g_adf1Enabled ? 1 : 0;
+    blob.adf2Enabled = g_adf2Enabled ? 1 : 0;
 
     EEPROM.put(DISC_CTRL_EEPROM_ADDR, blob);
     bool committed = commitEEPROMNow();
@@ -224,21 +231,29 @@ static bool loadDiscCtrlSettings(bool emitJson = true) {
 
     if (ok) {
         g_discAverageSecs = blob.avgWindowSecs;
+        g_adf1Enabled = (blob.adf1Enabled != 0);
+        g_adf2Enabled = (blob.adf2Enabled != 0);
     } else {
         g_discAverageSecs = DISC_AVERAGE_SECS;
         disc.setLoopGains(DISC_P_GAIN, DISC_I_GAIN);
         disc.setWarmupSecs(DISC_WARMUP_SECS);
+        g_adf1Enabled = (ADF1_ENABLED_DEFAULT != 0);
+        g_adf2Enabled = (ADF2_ENABLED_DEFAULT != 0);
     }
     status.setDiscAvgWindowSecs(g_discAverageSecs);
+    status.setAdf1Enabled(g_adf1Enabled);
+    status.setAdf2Enabled(g_adf2Enabled);
 
     if (emitJson) {
-        StaticJsonDocument<224> dj;
+        StaticJsonDocument<256> dj;
         dj["status"] = ok ? "info" : "warning";
         dj["event"] = ok ? "loaded_disc_ctrl" : "using_default_disc_ctrl";
         dj["avg_window_s"] = g_discAverageSecs;
         dj["p_gain"] = disc.pGain();
         dj["i_gain"] = disc.iGain();
         dj["warmup_s"] = disc.warmupSecs();
+        dj["adf1_enabled"] = g_adf1Enabled;
+        dj["adf2_enabled"] = g_adf2Enabled;
         serializeJson(dj, Serial);
         Serial.println();
     }
@@ -917,8 +932,72 @@ static void handleCLI(String s) {
                 dj["settle_s"] = (int)(settleMs / 1000);
                 serializeJson(dj, Serial); Serial.println();
             }
+        } else if (strcmp(cmd, "pll_ctrl") == 0) {
+            const char* action = doc["action"] | "get";
+            if (strcmp(action, "get") == 0) {
+                StaticJsonDocument<192> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "pll_ctrl";
+                dj["action"] = "get";
+                dj["adf1_enabled"] = g_adf1Enabled;
+                dj["adf2_enabled"] = g_adf2Enabled;
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else if (strcmp(action, "set") == 0) {
+                bool changed = false;
+                bool persist = doc["persist"] | true;
+                if (doc.containsKey("adf1_enabled")) {
+                    bool en = doc["adf1_enabled"].as<bool>();
+                    if (en != g_adf1Enabled) {
+                        g_adf1Enabled = en;
+                        status.setAdf1Enabled(en);
+                        if (en) {
+                            adf1.enable(true);
+                            adf1.program(adf1_regs);
+                            delay(100);
+                            haveADF1 = adf1.isLocked() ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
+                            adf1_attempts = 1;
+                        } else {
+                            adf1.enable(false);
+                            haveADF1 = PeripheralStatus::PS_ABSENT;
+                        }
+                        changed = true;
+                    }
+                }
+                if (doc.containsKey("adf2_enabled")) {
+                    bool en = doc["adf2_enabled"].as<bool>();
+                    if (en != g_adf2Enabled) {
+                        g_adf2Enabled = en;
+                        status.setAdf2Enabled(en);
+                        if (en) {
+                            adf2.enable(true);
+                            adf2.program(adf2_regs);
+                            delay(100);
+                            haveADF2 = adf2.isLocked() ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
+                            adf2_attempts = 1;
+                        } else {
+                            adf2.enable(false);
+                            haveADF2 = PeripheralStatus::PS_ABSENT;
+                        }
+                        changed = true;
+                    }
+                }
+                StaticJsonDocument<256> dj;
+                dj["status"] = "ok";
+                dj["cmd"] = "pll_ctrl";
+                dj["action"] = "set";
+                dj["adf1_enabled"] = g_adf1Enabled;
+                dj["adf2_enabled"] = g_adf2Enabled;
+                dj["changed"] = changed;
+                dj["persist_requested"] = persist;
+                dj["persisted"] = (persist && changed) ? saveDiscCtrlSettings(false) : false;
+                serializeJson(dj, Serial);
+                Serial.println();
+            } else {
+                sendJsonMessage("error", "pll_ctrl action must be get|set");
+            }
         } else if (strcmp(cmd, "help") == 0) {
-            sendJsonMessage("info", "JSON commands: adf1/adf2, dac, adf_persist, disc_ctrl get|set|save|load, status_ctrl get|set, efc_cal");
+            sendJsonMessage("info", "JSON commands: adf1/adf2, dac, adf_persist, disc_ctrl get|set|save|load, pll_ctrl get|set, status_ctrl get|set, efc_cal");
         } else if (strcmp(cmd, "info") == 0) {
             StaticJsonDocument<384> dj;
             dj["status"] = "ok";
@@ -928,6 +1007,8 @@ static void handleCLI(String s) {
             dj["have_dac"] = static_cast<int>(haveDAC);
             dj["have_adf1"] = static_cast<int>(haveADF1);
             dj["have_adf2"] = static_cast<int>(haveADF2);
+            dj["adf1_enabled"] = g_adf1Enabled;
+            dj["adf2_enabled"] = g_adf2Enabled;
             dj["disc_avg_window_s"] = g_discAverageSecs;
             dj["disc_p_gain"] = disc.pGain();
             dj["disc_i_gain"] = disc.iGain();
@@ -1185,25 +1266,24 @@ void setup() {
     loadADFRegs(adf1_regs, ADF1_REGS, ADF1_EEPROM_ADDR);
     loadADFRegs(adf2_regs, ADF2_REGS, ADF2_EEPROM_ADDR);
 
-    // Initialise and program both ADF4351s
-    const bool adf1Installed = (ADF1_INSTALLED != 0);
-    const bool adf2Installed = (ADF2_INSTALLED != 0);
+    // Initialise both ADF4351 GPIO (always, so pins are defined even if
+    // the PLL is disabled — CE will be driven low for disabled PLLs).
+    adf1.begin();
+    adf2.begin();
 
-    if (adf1Installed) {
-        adf1.begin();
-    } else {
+    // Disable CE for PLLs that are turned off in the runtime config.
+    if (!g_adf1Enabled) {
+        adf1.enable(false);
         haveADF1 = PeripheralStatus::PS_ABSENT;
-        sendJsonMessage("info", "adf1_not_installed_skip_init");
+        sendJsonMessage("info", "adf1_disabled");
     }
-
-    if (adf2Installed) {
-        adf2.begin();
-    } else {
+    if (!g_adf2Enabled) {
+        adf2.enable(false);
         haveADF2 = PeripheralStatus::PS_ABSENT;
-        sendJsonMessage("info", "adf2_not_installed_skip_init");
+        sendJsonMessage("info", "adf2_disabled");
     }
 
-    if (adf1Installed) {
+    if (g_adf1Enabled) {
         adf1.program(adf1_regs);
         adf1_attempts = 1;
         delay(100);
@@ -1217,7 +1297,7 @@ void setup() {
         }
     }
 
-    if (adf2Installed) {
+    if (g_adf2Enabled) {
         adf2.program(adf2_regs);
         adf2_attempts = 1;
         delay(100);
@@ -1236,11 +1316,11 @@ void setup() {
     const uint32_t ADF_LOCK_WAIT_MS = 5000;
     const uint32_t ADF_LOCK_POLL_MS = 200;
     uint32_t startMs = millis();
-    bool a1_locked = !adf1Installed;
-    bool a2_locked = !adf2Installed;
+    bool a1_locked = !g_adf1Enabled;
+    bool a2_locked = !g_adf2Enabled;
     while ((millis() - startMs) < ADF_LOCK_WAIT_MS) {
-        if (adf1Installed) a1_locked = adf1.isLocked();
-        if (adf2Installed) a2_locked = adf2.isLocked();
+        if (g_adf1Enabled) a1_locked = adf1.isLocked();
+        if (g_adf2Enabled) a2_locked = adf2.isLocked();
         if (a1_locked && a2_locked) break;
         delay(ADF_LOCK_POLL_MS);
     }
@@ -1253,17 +1333,16 @@ void setup() {
         Serial.println();
     }
 
-    if (adf1Installed) haveADF1 = a1_locked ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
-    if (adf2Installed) haveADF2 = a2_locked ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
+    if (g_adf1Enabled) haveADF1 = a1_locked ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
+    if (g_adf2Enabled) haveADF2 = a2_locked ? PeripheralStatus::PS_OK : PeripheralStatus::PS_ABSENT;
 
-    // If any critical subsystem failed to initialize after the grace period,
-    // assert the alarm LED so the operator can see an issue.
+    // If any enabled PLL failed to lock, assert the alarm LED.
     bool initFailed = false;
-    if (adf1Installed && !a1_locked) {
+    if (g_adf1Enabled && !a1_locked) {
         sendJsonMessage("error", "adf1_failed_to_lock_during_init");
         initFailed = true;
     }
-    if (adf2Installed && !a2_locked) {
+    if (g_adf2Enabled && !a2_locked) {
         sendJsonMessage("error", "adf2_failed_to_lock_during_init");
         initFailed = true;
     }
@@ -1473,7 +1552,7 @@ void loop() {
     static uint32_t lastLockCheck = 0;
     if (millis() - lastLockCheck >= 1000) {
         lastLockCheck = millis();
-        if ((ADF1_INSTALLED != 0) && !adf1.isLocked()) {
+        if (g_adf1Enabled && !adf1.isLocked()) {
             if (haveADF1 == PeripheralStatus::PS_OK && adf1_attempts < MAX_ADF_ATTEMPTS) {
                 sendJsonMessage("warning", "adf1_lock_lost_reprogramming_attempt");
                 adf1.program(adf1_regs);
@@ -1486,7 +1565,7 @@ void loop() {
             // reset attempts on successful lock
             adf1_attempts = 1;
         }
-        if ((ADF2_INSTALLED != 0) && !adf2.isLocked()) {
+        if (g_adf2Enabled && !adf2.isLocked()) {
             if (haveADF2 == PeripheralStatus::PS_OK && adf2_attempts < MAX_ADF_ATTEMPTS) {
                 sendJsonMessage("warning", "adf2_lock_lost_reprogramming_attempt");
                 adf2.program(adf2_regs);
