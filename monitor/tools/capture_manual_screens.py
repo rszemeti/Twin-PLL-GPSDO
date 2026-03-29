@@ -129,6 +129,10 @@ def main():
 
     tabs.setCurrentIndex(3)
     QApplication.processEvents()
+    _save_widget_png(main_window, OUT_DIR / '07-saverestore-live.png')
+
+    tabs.setCurrentIndex(4)
+    QApplication.processEvents()
     _save_widget_png(main_window, OUT_DIR / '03-about-live.png')
 
     pll_dialog = PLLConfigDialog(pll_name='PLL1', parent=main_window)
