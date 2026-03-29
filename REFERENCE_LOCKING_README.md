@@ -102,10 +102,13 @@ the two views are mathematically identical.
 > X each second to compute the per-second delta
 > (`edgesThisSec = prevX − currentX`). The one-second residual is then
 > just `edgesThisSec − 10,000,000`. These integer residuals are stored
-> in a ring buffer with a running `int64_t` sum, and the average over
-> the window (sum / N as a `double`) is what feeds the integrator.
-> This avoids the need for a 64-bit running total and any concern about
-> wrap, while preserving sub-ppb precision through the entire path.
+> in a ring buffer with a windowed `int64_t` running sum (bounded by
+> window size × max per-second error, not an unbounded accumulation).
+> The average over the window (`sum / N` as a `double`) is what feeds
+> the integrator. The per-second unsigned subtraction of X handles
+> 32-bit wrap correctly, and the windowed sum avoids any concern about
+> unbounded growth, while preserving sub-ppb precision through the
+> entire path.
 
 From the per-second edge count, the frequency error is simply:
 
