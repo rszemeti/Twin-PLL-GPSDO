@@ -14,7 +14,7 @@ StatusManager::StatusManager(Discipliner &disc, GPSParser &gps,
 
 void StatusManager::begin() {
     pinMode(LED_GPS_LOCK,    OUTPUT);
-    pinMode(LED_DISCIPLINED, OUTPUT);
+    pinMode(LED_GPS_DISC,    OUTPUT);
     pinMode(LED_ADF1_LOCK,   OUTPUT);
     pinMode(LED_ADF2_LOCK,   OUTPUT);
     pinMode(LED_ALARM,       OUTPUT);
@@ -26,7 +26,7 @@ void StatusManager::begin() {
 
     // All off at start
     setLED(LED_GPS_LOCK,    false);
-    setLED(LED_DISCIPLINED, false);
+    setLED(LED_GPS_DISC,    false);
     setLED(LED_ADF1_LOCK,   false);
     setLED(LED_ADF2_LOCK,   false);
     setLED(LED_ALARM,       false);
@@ -83,7 +83,7 @@ void StatusManager::update() {
     setLED(LED_GPS_LOCK, gs.hasFix && gs.ppsValid);
 
     // Disciplined LED
-    setLED(LED_DISCIPLINED,
+    setLED(LED_GPS_DISC,
         _disc.state() == DiscState::LOCKED ||
         _disc.state() == DiscState::HOLDOVER);
 

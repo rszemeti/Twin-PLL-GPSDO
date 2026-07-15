@@ -1129,11 +1129,9 @@ static void handleCLI(String s) {
 // Object instantiation
 // ============================================================
 
-ADF4351 adf1(ADF1_CLK_PIN, ADF1_MOSI_PIN, ADF1_LE_PIN,
-             ADF1_CE_PIN,  ADF1_LD_PIN);
+ADF4351 adf1(ADF1_LE_PIN, ADF1_CE_PIN, ADF1_LD_PIN);
 
-ADF4351 adf2(ADF2_CLK_PIN, ADF2_MOSI_PIN, ADF2_LE_PIN,
-             ADF2_CE_PIN,  ADF2_LD_PIN);
+ADF4351 adf2(ADF2_LE_PIN, ADF2_CE_PIN, ADF2_LD_PIN);
 
 MCP4725         dac(MCP4725_ADDR);
 GPSParser       gps(Serial1);

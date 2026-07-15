@@ -8,19 +8,25 @@
 // ============================================================
 
 // --- GPS ---
-#define GPS_UART        uart0
-#define GPS_TX_PIN      0
-#define GPS_RX_PIN      1
-#define GPS_1PPS_PIN    2
+#define GPS_UART        uart1
+#define GPS_TX_PIN      20   // Pico TX → GPS module RX  (schematic: GPS_RX)
+#define GPS_RX_PIN      21   // Pico RX ← GPS module TX  (schematic: GPS_TX)
+#define GPS_1PPS_PIN    28
 #define GPS_BAUD        9600
 
 // --- 10MHz frequency counter input (from OCXO) ---
-#define FREQ_COUNT_PIN  3
+#define FREQ_COUNT_PIN  22
+
+// --- ADF4351 shared hardware SPI bus ---
+// Select the Arduino SPI peripheral instance that matches your board wiring.
+// Valid values on RP2040/RP2350 are typically SPI or SPI1.
+#define ADF_SPI_PORT    SPI
+#define ADF_SCK_PIN     6    // shared SCK
+#define ADF_MOSI_PIN    7    // shared MOSI / TX
+#define ADF_SPI_HZ      1000000
 
 // --- ADF4351 #1 (104 MHz) ---
-#define ADF1_CLK_PIN    4
-#define ADF1_MOSI_PIN   5
-#define ADF1_LE_PIN     6
+#define ADF1_LE_PIN     4    // latch enable
 #define ADF1_CE_PIN     12
 #define ADF1_LD_PIN     10   // lock detect
 
@@ -28,9 +34,7 @@
 #define ADF1_ENABLED_DEFAULT  1
 
 // --- ADF4351 #2 (116 MHz) ---
-#define ADF2_CLK_PIN    7
-#define ADF2_MOSI_PIN   8
-#define ADF2_LE_PIN     9
+#define ADF2_LE_PIN     8    // latch enable
 #define ADF2_CE_PIN     13
 #define ADF2_LD_PIN     11   // lock detect
 
@@ -47,27 +51,27 @@
 // Requires an external RC low-pass filter on PWM_DAC_PIN to smooth to DC.
 // Uses 12-bit analogWrite so range and limits match MCP4725 (0-4095).
 // Set to 0 to use the I2C MCP4725 DAC (normal operation).
-#define USE_PWM_DAC     1
-#define PWM_DAC_PIN     26
+#define USE_PWM_DAC     0
+#define PWM_DAC_PIN     25
 
 // --- Status LEDs ---
-#define LED_GPS_LOCK    16
-#define LED_DISCIPLINED 17
+#define LED_GPS_DISC    16   // GPS discipline active
+#define LED_GPS_LOCK    17   // GPS lock
 #define LED_ADF1_LOCK   18
 #define LED_ADF2_LOCK   19
-#define LED_ALARM       20
+#define LED_ALARM       27
 
-// Additional spare LEDs
+// Additional spare LEDs (optional, not on schematic)
 // LED that flashes at 0.5s intervals when any satellites are present
 #define LED_SATS_BLINK  23
 // LED that indicates a usable fix (satellites in use >= 4)
 #define LED_SATS_USED   24
 
-// --- Alarm output (open drain / active low) ---
-#define ALARM_PIN       21
+// --- Alarm output (open collector via BC847 + R22) ---
+#define ALARM_PIN       0
 
 // --- Debug UART ---
-#define DEBUG_TX_PIN    22
+#define DEBUG_TX_PIN    3
 
 // ============================================================
 // ADF4351 Register Values

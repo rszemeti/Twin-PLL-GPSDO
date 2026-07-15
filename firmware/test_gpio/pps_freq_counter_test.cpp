@@ -2,8 +2,8 @@
  * Minimal PPS-Synchronized Frequency Counter Test
  * Using the exact same technique as main firmware
  * 
- * GPIO2 (pin 4): 1PPS input (rising edge)
- * GPIO3 (pin 5): 10MHz input (PWM edge counter, PWM_DIV_B_RISING mode)
+ * GPIO28 (pin 34): 1PPS input (rising edge)
+ * GPIO22 (pin 29): 10MHz input (PWM edge counter, PWM_DIV_B_RISING mode)
  * 
  * On each 1PPS edge: read PWM counter + wrap count and calculate total count
  * Expected: ~10,000,000 counts per PPS period
@@ -15,8 +15,8 @@
 #include <hardware/gpio.h>
 #include <hardware/irq.h>
 
-#define FREQ_PIN 3        // GPIO3, 10MHz input (PWM edge counter)
-#define PPS_PIN 2         // GPIO2, 1PPS input
+#define FREQ_PIN 22       // GPIO22, 10MHz input (PWM edge counter)
+#define PPS_PIN 28        // GPIO28, 1PPS input
 #define LED_PIN 25        // LED
 
 static void waitForUsbSerial(uint32_t timeout_ms) {
@@ -91,7 +91,7 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
     
-    // ===== Setup GPIO3 as PWM edge counter (10MHz) =====
+    // ===== Setup GPIO22 as PWM edge counter (10MHz) =====
     gpio_set_function(FREQ_PIN, GPIO_FUNC_PWM);
     slice_num = pwm_gpio_to_slice_num(FREQ_PIN);
     
@@ -110,7 +110,7 @@ void setup() {
     
     pwm_set_enabled(slice_num, true);
     
-    // ===== Setup GPIO2 as 1PPS input =====
+    // ===== Setup GPIO28 as 1PPS input =====
     gpio_init(PPS_PIN);
     gpio_set_dir(PPS_PIN, GPIO_IN);
     gpio_pull_down(PPS_PIN);
