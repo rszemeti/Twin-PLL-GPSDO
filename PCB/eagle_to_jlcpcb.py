@@ -74,11 +74,11 @@ def normalise_value(val):
         if m:
             return f"{m.group(1)}{unit}"
 
-    # --- Resistor shorthand: XRY -> X.YR, XKY -> X.YK, XMY -> X.YM ---
-    # e.g. 4K7 -> 4.7K, 1K0 -> 1K, 0R -> 0R, 100R -> 100R, 2M2 -> 2.2M
-    res_map = {'R': 'R', 'K': 'K', 'M': 'M'}
+    # --- Resistor shorthand: XRY -> X.YΩ, XKY -> X.YkΩ, XMY -> X.YMΩ ---
+    # JLC style: 5K1 -> 5.1kΩ, 1K0 -> 1kΩ, 100R -> 100Ω, 2M2 -> 2.2MΩ
+    res_map = {'R': 'Ω', 'K': 'kΩ', 'M': 'MΩ'}
     for letter, unit in res_map.items():
-        # With fractional part: 4K7 -> 4.7K, 1R5 -> 1.5R
+        # With fractional part: 4K7 -> 4.7kΩ, 1R5 -> 1.5Ω
         m = re.match(rf'^(\d+){letter}(\d+)$', s, re.IGNORECASE)
         if m:
             frac = m.group(2)
@@ -86,7 +86,7 @@ def normalise_value(val):
                 return f"{m.group(1)}{unit}"
             return f"{m.group(1)}.{frac}{unit}"
 
-        # Plain: 100R, 10K, 0R
+        # Plain: 100R -> 100Ω, 10K -> 10kΩ, 0R -> 0Ω
         m = re.match(rf'^(\d+){letter}$', s, re.IGNORECASE)
         if m:
             return f"{m.group(1)}{unit}"
