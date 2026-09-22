@@ -1,0 +1,118 @@
+********************************************************************************
+Obsolete PIO Core v6.1.19 is used (previous was 6.2.0)
+Please remove multiple PIO Cores from a system:
+https://docs.platformio.org/en/latest/core/installation/troubleshooting.html
+********************************************************************************
+Processing pico2 (platform: https://github.com/maxgerhardt/platform-raspberrypi.git; board: rpipico2; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/raspberrypi/rpipico2.html
+PLATFORM: Raspberry Pi RP2040 (1.19.0+sha.03bb48f) > Pico 2
+HARDWARE: RP2350 150MHz, 512KB RAM, 4MB Flash
+DEBUG: Current (blackmagic) External (blackmagic, cmsis-dap, jlink, picoprobe, raspberrypi-swd)
+PACKAGES: 
+ - framework-arduinopico @ 1.50600.0+sha.6a1d13e9 
+ - tool-picotool-rp2040-earlephilhower @ 5.140200.250530 (14.2.0) 
+ - tool-pioasm-rp2040-earlephilhower @ 5.140200.250530 (14.2.0) 
+ - toolchain-rp2040-earlephilhower @ 5.140200.250530 (14.2.0)
+Flash size: 4.00MB
+Sketch size: 3.00MB
+Filesystem size: 1.00MB
+PSRAM size: 0.00MB
+Maximium Sketch size: 3141632 EEPROM start: 0x103ff000 Filesystem start: 0x102ff000 Filesystem end: 0x103ff000
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 79 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- Wire @ 1.0
+|-- ArduinoJson @ 6.21.6
+|-- EEPROM @ 1.0
+|-- adf4351
+|-- gps
+|-- mcp4725
+|-- LittleFS @ 0.1.0
+Building in release mode
+Compiling .pio\build\pico2\src\discipliner.cpp.o
+Compiling .pio\build\pico2\src\main.cpp.o
+Compiling .pio\build\pico2\src\status.cpp.o
+Generating linkerscript C:\Users\robin\Documents\GitHub\Twin PLL GPSDO\firmware\.pio\build\pico2/memmap_default.ld
+Linking .pio\build\pico2\firmware.elf
+Generating UF2 image
+picotool uf2 convert -t elf ".pio\build\pico2\firmware.elf" ".pio\build\pico2\firmware.uf2"
+Retrieving maximum program size .pio\build\pico2\firmware.elf
+Checking size .pio\build\pico2\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [          ]   2.5% (used 12980 bytes from 524288 bytes)
+Flash: [          ]   4.4% (used 139508 bytes from 3141632 bytes)
+Building .pio\build\pico2\firmware.bin
+Building .pio\build\pico2\firmware.bin.signed
+========================= [SUCCESS] Took 21.30 seconds =========================
+
+Processing gpio_test (platform: https://github.com/maxgerhardt/platform-raspberrypi.git; board: rpipico2; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/raspberrypi/rpipico2.html
+PLATFORM: Raspberry Pi RP2040 (1.19.0+sha.03bb48f) > Pico 2
+HARDWARE: RP2350 150MHz, 512KB RAM, 4MB Flash
+DEBUG: Current (blackmagic) External (blackmagic, cmsis-dap, jlink, picoprobe, raspberrypi-swd)
+PACKAGES: 
+ - framework-arduinopico @ 1.50600.0+sha.6a1d13e9 
+ - tool-picotool-rp2040-earlephilhower @ 5.140200.250530 (14.2.0) 
+ - tool-pioasm-rp2040-earlephilhower @ 5.140200.250530 (14.2.0) 
+ - toolchain-rp2040-earlephilhower @ 5.140200.250530 (14.2.0)
+Flash size: 4.00MB
+Sketch size: 4.00MB
+Filesystem size: 0.00MB
+PSRAM size: 0.00MB
+Maximium Sketch size: 4190208 EEPROM start: 0x103ff000 Filesystem start: 0x103ff000 Filesystem end: 0x103ff000
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 78 compatible libraries
+Scanning dependencies...
+No dependencies
+Building in release mode
+Compiling .pio\build\gpio_test\FrameworkArduinoBootloader\none.S.o
+Compiling .pio\build\gpio_test\test_gpio\pps_freq_counter_test.cpp.o
+Generating linkerscript C:\Users\robin\Documents\GitHub\Twin PLL GPSDO\firmware\.pio\build\gpio_test/memmap_default.ld
+Compiling .pio\build\gpio_test\FrameworkArduino\BluetoothDebug.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\Bootsel.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\CoreMutex.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\FS.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\PIOProgram.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\RP2040Support.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\Semihosting.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\SerialPIO.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\SerialUART.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\SerialUSB.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\StackThunk.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\Tone.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\USB.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\WMath.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\_freertos.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\api\Common.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\api\IPAddress.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\api\PluggableUSB.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\api\Print.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\api\Stream.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\api\String.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\cyw43_wrappers.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\delay.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\croutine.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\event_groups.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\freertos-lwip.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\freertos-main.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\heap_3a.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\list.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\lwip_freertos.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\mpu_wrappers_v2_asm.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\port.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\portASM.S.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\portasm.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\queue.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\stream_buffer.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\tasks.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\timers.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\freertos\variantHooks.cpp.o
+Compiling .pio\build\gpio_test\FrameworkArduino\gprof_gmon.c.o
+Compiling .pio\build\gpio_test\FrameworkArduino\gprof_shim.S.o

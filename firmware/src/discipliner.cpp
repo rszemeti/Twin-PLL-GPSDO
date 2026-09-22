@@ -131,7 +131,7 @@ void Discipliner::update(double avgCountError, bool gpsValid) {
     if ((uint16_t)abs((int)_dacValue - (int)_lastSavedValue) >= DAC_SAVE_HYSTERESIS
         && (saveNow - _lastSavedMs) >= interval_ms) {
         EEPROM.put(DAC_EEPROM_ADDR, _dacValue);
-        EEPROM.commit();
+        commitEEPROM();
         _lastSavedValue = _dacValue;
         _lastSavedMs = saveNow;
     }
@@ -203,6 +203,17 @@ void Discipliner::setDACValue(uint16_t val) {
     _dacValue = val;
     _integral = (double)val;
     applyDAC(val);
+}
+
+void Discipliner::saveDACToEEPROM() {
+    EEPROM.put(DAC_EEPROM_ADDR, _dacValue);
+    commitEEPROM();
+    _lastSavedValue = _dacValue;
+    _lastSavedMs = millis();
+}
+
+bool Discipliner::commitEEPROM() {
+    return _commitFn ? _commitFn() : EEPROM.commit();
 }
 
 bool Discipliner::setLoopGains(float pGain, float iGain) {

@@ -17,13 +17,12 @@
 // --- 10MHz frequency counter input (from OCXO) ---
 #define FREQ_COUNT_PIN  22
 
-// --- ADF4351 shared hardware SPI bus ---
-// Select the Arduino SPI peripheral instance that matches your board wiring.
-// Valid values on RP2040/RP2350 are typically SPI or SPI1.
-#define ADF_SPI_PORT    SPI
+// --- ADF4351 shared SPI-like bus (bit-banged) ---
+// GPIO8 is not a valid hardware SPI MOSI/TX pin on this core (SPI0 or SPI1),
+// so these pins are clocked manually in adf4351.cpp rather than via the
+// Arduino SPI peripheral. Fixed by hardware wiring, not configurable.
 #define ADF_SCK_PIN     6    // shared SCK
-#define ADF_MOSI_PIN    7    // shared MOSI / TX
-#define ADF_SPI_HZ      1000000
+#define ADF_MOSI_PIN    8    // shared MOSI / TX
 
 // --- ADF4351 #1 (104 MHz) ---
 #define ADF1_LE_PIN     4    // latch enable
@@ -34,14 +33,16 @@
 #define ADF1_ENABLED_DEFAULT  1
 
 // --- ADF4351 #2 (116 MHz) ---
-#define ADF2_LE_PIN     8    // latch enable
+#define ADF2_LE_PIN     9    // latch enable
 #define ADF2_CE_PIN     13
 #define ADF2_LD_PIN     11   // lock detect
 
 // Default PLL2 enable state (runtime-configurable via pll_ctrl command).
-#define ADF2_ENABLED_DEFAULT  0
+#define ADF2_ENABLED_DEFAULT  1
 
 // --- I2C for MCP4725 DAC (OCXO EFC) ---
+// GPIO14/15 are only valid I2C1 pins (Wire1), not I2C0 (Wire) — code must
+// use Wire1.setSDA()/setSCL() to match, not the default Wire instance.
 #define I2C_SDA_PIN     14
 #define I2C_SCL_PIN     15
 #define MCP4725_ADDR    0x60  // A0 tied low
@@ -211,7 +212,11 @@ static const uint32_t ADF2_REGS[6] = {
 #define ADF1_EEPROM_ADDR    64
 #define ADF2_EEPROM_ADDR    256
 #define ADF_REGS_MAGIC      0xADF43510UL
-#define ADF_REGS_VERSION    2
+// Bump this whenever ADF1_REGS/ADF2_REGS change — it invalidates any
+// stale register blob already saved to EEPROM/LittleFS from a previous
+// build, so the current values above actually take effect on next boot
+// instead of being silently overridden by old saved data.
+#define ADF_REGS_VERSION    3
 // Set to 0 to disable ADF register EEPROM writes (RAM-only updates for debug).
 #define ADF_PERSIST_EEPROM  0
 // Debounce interval before committing staged ADF EEPROM writes.

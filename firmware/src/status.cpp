@@ -8,7 +8,7 @@ StatusManager::StatusManager(Discipliner &disc, GPSParser &gps,
       _lastPrint(0), _adf1LostMs(0), _adf2LostMs(0),
         _alarmActiveSteady(false), _alarmActiveFlash(false), _alarmFlashOn(false), _lastAlarmFlashMs(0),
         _satsBlinkOn(false), _lastSatsBlinkMs(0),
-                _adf1BlinkOn(false), _adf2BlinkOn(false), _lastAdfBlinkMs(0), _discAvgWindowSecs(DISC_AVERAGE_SECS),
+                _adf1BlinkOn(false), _adf2BlinkOn(false), _lastAdf1BlinkMs(0), _lastAdf2BlinkMs(0), _discAvgWindowSecs(DISC_AVERAGE_SECS),
                 _statusIntervalMs(5000), _measuredFreqHz(0.0), _measuredFreqErrorPpb(0.0), _countErrSum(0),
                 _adf1Enabled(true), _adf2Enabled(true) {}
 
@@ -160,8 +160,8 @@ void StatusManager::updateAdfLEDs(bool adf1locked, bool adf2locked) {
         _adf1BlinkOn = false;
         setLED(LED_ADF1_LOCK, true);
     } else {
-        if (now - _lastAdfBlinkMs >= blinkInterval) {
-            _lastAdfBlinkMs = now;
+        if (now - _lastAdf1BlinkMs >= blinkInterval) {
+            _lastAdf1BlinkMs = now;
             _adf1BlinkOn = !_adf1BlinkOn;
         }
         setLED(LED_ADF1_LOCK, _adf1BlinkOn);
@@ -173,8 +173,8 @@ void StatusManager::updateAdfLEDs(bool adf1locked, bool adf2locked) {
         _adf2BlinkOn = false;
         setLED(LED_ADF2_LOCK, true);
     } else {
-        if (now - _lastAdfBlinkMs >= blinkInterval) {
-            _lastAdfBlinkMs = now;
+        if (now - _lastAdf2BlinkMs >= blinkInterval) {
+            _lastAdf2BlinkMs = now;
             _adf2BlinkOn = !_adf2BlinkOn;
         }
         setLED(LED_ADF2_LOCK, _adf2BlinkOn);

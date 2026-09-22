@@ -43,10 +43,13 @@ private:
     // Satellite LED blink state
     bool     _satsBlinkOn;
     uint32_t _lastSatsBlinkMs;
-    // ADF lock LED blink state
+    // ADF lock LED blink state (separate timers — must not share one, or
+    // whichever PLL is checked first keeps resetting it before the other
+    // PLL's interval check can ever pass)
     bool     _adf1BlinkOn;
     bool     _adf2BlinkOn;
-    uint32_t _lastAdfBlinkMs;
+    uint32_t _lastAdf1BlinkMs;
+    uint32_t _lastAdf2BlinkMs;
     uint32_t _discAvgWindowSecs;
     uint32_t _statusIntervalMs;
     double   _measuredFreqHz;

@@ -60,6 +60,17 @@ public:
     // Allow external code to set DAC value immediately (uses same path as PI)
     void setDACValue(uint16_t val);
     bool setLoopGains(float pGain, float iGain);
+    // Force-write the current DAC value to EEPROM as the power-on default,
+    // bypassing the hysteresis/interval gate used by the auto-save in update().
+    void saveDACToEEPROM();
+
+    // Flash writes on this dual-core board must be gated (PIO IRQ /
+    // multicore_lockout) or a commit can stall core1 mid-fetch while XIP
+    // flash is unmapped. Discipliner has no PIO/multicore knowledge, so
+    // main.cpp injects its existing safe-commit helper here; falls back to
+    // a plain EEPROM.commit() if never set.
+    typedef bool (*EEPROMCommitFn)();
+    void setEEPROMCommitFn(EEPROMCommitFn fn) { _commitFn = fn; }
 
 private:
     MCP4725&  _dac;
@@ -81,6 +92,8 @@ private:
     // EEPROM save state
     uint32_t  _lastSavedMs;
     uint16_t  _lastSavedValue;
+    EEPROMCommitFn _commitFn = nullptr;
+    bool commitEEPROM();
     // Lock detection ring buffer (per-second DAC snapshots)
     uint16_t  _lockBuf[DISC_LOCK_BUF_SIZE];
     uint16_t  _lockBufIdx;     // next write position

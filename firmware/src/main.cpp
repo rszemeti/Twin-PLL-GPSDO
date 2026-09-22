@@ -475,18 +475,31 @@ static void serviceADFEEPROMCommit() {
 #endif
 }
 
-static bool programAndPersistADF(ADF4351& adf, uint32_t regs[6], uint32_t eepromAddr, PeripheralStatus availability) {
-    bool programmed = false;
-    if (availability == PeripheralStatus::PS_OK) {
-        sendTrace("adf", "before_program");
-        adf.program(regs);
-        programmed = true;
-        sendTrace("adf", "after_program");
+static bool programAndPersistADF(ADF4351& adf, uint32_t regs[6], uint32_t eepromAddr,
+                                  PeripheralStatus& availability, int& attempts) {
+    // Explicit, user-initiated writes always reach the chip, even if the
+    // automatic lock-lost-retry loop (main loop, ~1s poll) had already given
+    // up and latched this synth PS_ABSENT after MAX_ADF_ATTEMPTS failures.
+    // Without this, a fix attempted through the GUI after that latch trips
+    // is silently accepted (status:"ok") but never actually reaches the
+    // ADF4351 over SPI, since nothing else ever clears the latch.
+    if (availability == PeripheralStatus::PS_ABSENT) {
+        sendJsonMessage("info", "explicit_program_clearing_absent_latch");
     }
+    sendTrace("adf", "before_program");
+    adf.program(regs);
+    sendTrace("adf", "after_program");
+
+    // Re-arm the automatic lock monitor with a fresh retry budget so it
+    // re-evaluates real lock state on its next 1s poll instead of staying
+    // latched absent.
+    availability = PeripheralStatus::PS_OK;
+    attempts = 1;
+
     sendTrace("adf", "before_save");
     saveADFRegs(regs, eepromAddr);
     sendTrace("adf", "after_save");
-    return programmed;
+    return true;
 }
 
 // CLI helpers
@@ -579,7 +592,7 @@ static void handleCLI(String s) {
                 }
             }
             else if (strcmp(action, "program") == 0) {
-                bool programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1);
+                bool programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1, adf1_attempts);
                 StaticJsonDocument<192> dj;
                 dj["status"] = "ok";
                 dj["cmd"] = "adf1";
@@ -615,7 +628,7 @@ static void handleCLI(String s) {
                 bool programmed = false;
                 if (doProgram) {
                     sendTrace("adf1", "set_all_before_program_persist");
-                    programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1);
+                    programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1, adf1_attempts);
                     sendTrace("adf1", "set_all_after_program_persist");
                 }
 
@@ -656,7 +669,7 @@ static void handleCLI(String s) {
                 }
             }
             else if (strcmp(action, "program") == 0) {
-                bool programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2);
+                bool programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2, adf2_attempts);
                 StaticJsonDocument<192> dj;
                 dj["status"] = "ok";
                 dj["cmd"] = "adf2";
@@ -692,7 +705,7 @@ static void handleCLI(String s) {
                 bool programmed = false;
                 if (doProgram) {
                     sendTrace("adf2", "set_all_before_program_persist");
-                    programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2);
+                    programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2, adf2_attempts);
                     sendTrace("adf2", "set_all_after_program_persist");
                 }
 
@@ -740,10 +753,15 @@ static void handleCLI(String s) {
             } else if (val >= DAC_MIN && val <= DAC_MAX) {
                 disc.setCalActive(true);
                 disc.setDACValue((uint16_t)val);
+                bool persist = doc["persist"] | false;
+                if (persist) {
+                    disc.saveDACToEEPROM();
+                }
                 StaticJsonDocument<192> dj;
                 dj["status"] = "ok";
                 dj["cmd"] = "dac";
                 dj["value"] = val;
+                dj["persisted"] = persist;
                 dj["note"] = "loop frozen — send {\"cmd\":\"dac\",\"value\":\"resume\"} to restore";
                 serializeJson(dj, Serial);
                 Serial.println();
@@ -1045,7 +1063,7 @@ static void handleCLI(String s) {
             else sendJsonMessage("info", "adf1_unavailable_skip_program");
         }
         else if (sub == "program") {
-            bool programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1);
+            bool programmed = programAndPersistADF(adf1, adf1_regs, ADF1_EEPROM_ADDR, haveADF1, adf1_attempts);
             sendJsonKV("ok", "programmed", programmed ? 1 : 0);
         }
         else if (sub == "default") { for (int i=0;i<6;i++) adf1_regs[i]=ADF1_REGS[i]; }
@@ -1080,7 +1098,7 @@ static void handleCLI(String s) {
             else sendJsonMessage("info", "adf2_unavailable_skip_program");
         }
         else if (sub == "program") {
-            bool programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2);
+            bool programmed = programAndPersistADF(adf2, adf2_regs, ADF2_EEPROM_ADDR, haveADF2, adf2_attempts);
             sendJsonKV("ok", "programmed", programmed ? 1 : 0);
         }
         else if (sub == "default") { for (int i=0;i<6;i++) adf2_regs[i]=ADF2_REGS[i]; }
@@ -1134,7 +1152,10 @@ ADF4351 adf1(ADF1_LE_PIN, ADF1_CE_PIN, ADF1_LD_PIN);
 ADF4351 adf2(ADF2_LE_PIN, ADF2_CE_PIN, ADF2_LD_PIN);
 
 MCP4725         dac(MCP4725_ADDR);
-GPSParser       gps(Serial1);
+// GPS_TX_PIN/GPS_RX_PIN (20/21) are only valid UART1 pins, and Serial1 in
+// this core is bound to UART0 (Serial2 is UART1) — must use Serial2 to
+// match GPS_UART (uart1) in config.h, or setTX()/setRX() panics.
+GPSParser       gps(Serial2);
 Discipliner     disc(dac);
 StatusManager   status(disc, gps, adf1, adf2);
 PIOTimingEngine timing(GPS_1PPS_PIN, FREQ_COUNT_PIN);
@@ -1148,6 +1169,11 @@ PIOTimingEngine timing(GPS_1PPS_PIN, FREQ_COUNT_PIN);
 void setup1() {
     // Required for safe flash writes from core0 using multicore_lockout_*.
     multicore_lockout_victim_init();
+
+    // Heartbeat on the onboard LED, independent of whatever core0 is doing —
+    // lets us tell a live-but-stuck-in-setup() core0 apart from a fully
+    // hung/resetting chip when core0 isn't reaching Serial output.
+    pinMode(LED_BUILTIN, OUTPUT);
 
 #if DISABLE_CORE1_TIMING_ENGINE
     sendJsonMessage("info", "core1_timing_disabled");
@@ -1169,9 +1195,15 @@ void setup1() {
 }
 
 void loop1() {
-    // All PIO work is interrupt-driven on this core.
-    // tight_loop_contents() hints to the compiler/CPU
-    // not to optimise this away.
+    // Heartbeat blink, 2Hz — proves core1 (and the shared clock) is alive
+    // regardless of what core0 is doing.
+    static uint32_t lastToggle = 0;
+    uint32_t now = millis();
+    if (now - lastToggle >= 250) {
+        lastToggle = now;
+        digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+    }
+    // All other PIO work is interrupt-driven on this core.
     tight_loop_contents();
 }
 
@@ -1183,7 +1215,13 @@ void setup() {
     // 150MHz = fully validated RP2350 speed, no overclocking needed.
     // At 150MHz, PIO timestamp resolution = 6.67ns.
     // GPS 1PPS accuracy (~20ns RMS) dominates anyway.
-    set_sys_clock_khz(150000, true);
+    //
+    // The actual clock switch happens via board_build.f_cpu (platformio.ini),
+    // which the core applies at boot *before* core1 is launched. Do NOT call
+    // set_sys_clock_khz() here too — core1 (setup1/loop1) is already running
+    // by the time setup() starts, and reconfiguring the PLL/sys clock out
+    // from under a live second core (mid-XIP-flash-fetch, unsynchronized)
+    // causes intermittent, non-deterministic corruption/hangs.
 
     Serial.begin(115200);
     delay(5000);
@@ -1209,15 +1247,17 @@ void setup() {
     disc.setDACEnabled(true);
     sendJsonMessage("info", "pwm_dac_mode");
 #else
-    // I2C for MCP4725 DAC - avoid forcing SDA/SCL pins to prevent accidental
-    // alternate-function assignment that can interfere with other peripherals.
-    // Use default TwoWire pin assignments provided by the core.
-    Wire.begin();
+    // I2C for MCP4725 DAC. I2C_SDA_PIN/I2C_SCL_PIN (14/15) are only valid
+    // pins for the I2C1 block (not I2C0/Wire's default GPIO4/5 — GPIO4
+    // also collides with ADF1_LE_PIN), so this must run on Wire1.
+    Wire1.setSDA(I2C_SDA_PIN);
+    Wire1.setSCL(I2C_SCL_PIN);
+    Wire1.begin();
 
     delay(50);
     // Detect DAC presence via I2C ACK
-    Wire.beginTransmission(MCP4725_ADDR);
-    if (Wire.endTransmission() != 0) {
+    Wire1.beginTransmission(MCP4725_ADDR);
+    if (Wire1.endTransmission() != 0) {
         haveDAC = PeripheralStatus::PS_ABSENT;
         sendJsonMessage("warning", "mcp4725_not_detected");
         disc.setDACEnabled(false);
@@ -1229,24 +1269,37 @@ void setup() {
     }
 #endif
 
+    sendJsonMessage("debug", "checkpoint_before_gps_uart");
     // GPS UART
-    Serial1.setTX(GPS_TX_PIN);
-    Serial1.setRX(GPS_RX_PIN);
+    Serial2.setTX(GPS_TX_PIN);
+    Serial2.setRX(GPS_RX_PIN);
     gps.begin(GPS_BAUD);
+    sendJsonMessage("debug", "checkpoint_after_gps_uart");
 
 #if !USE_PWM_DAC
     if (haveDAC == PeripheralStatus::PS_OK) {
         dac.begin();
     }
 #endif
+    sendJsonMessage("debug", "checkpoint_after_dac_begin");
 
     // EEPROM emulation must be initialized before put/get and committed after writes.
     // Reserve a small region sufficient for DAC + ADF blocks.
     EEPROM.begin(1024);
+    sendJsonMessage("debug", "checkpoint_after_eeprom_begin");
+
+    // Route all Discipliner EEPROM commits (auto-save + forced DAC persist)
+    // through the same PIO IRQ / multicore-lockout-gated commit used for
+    // ADF/disc_ctrl persistence — a raw EEPROM.commit() can stall core1
+    // mid-fetch while XIP flash is unmapped for the write.
+    disc.setEEPROMCommitFn(commitEEPROMNow);
 
     disc.begin();
+    sendJsonMessage("debug", "checkpoint_after_disc_begin");
     status.begin();
+    sendJsonMessage("debug", "checkpoint_after_status_begin");
     loadDiscCtrlSettings(true);
+    sendJsonMessage("debug", "checkpoint_after_load_disc_ctrl");
 
 #if ADF_PERSIST_EEPROM
     adfFsReady = LittleFS.begin();
@@ -1265,11 +1318,15 @@ void setup() {
     // Initialise mutable ADF regs from EEPROM or defaults
     loadADFRegs(adf1_regs, ADF1_REGS, ADF1_EEPROM_ADDR);
     loadADFRegs(adf2_regs, ADF2_REGS, ADF2_EEPROM_ADDR);
+    sendJsonMessage("debug", "checkpoint_after_load_adf_regs");
 
     // Initialise both ADF4351 GPIO (always, so pins are defined even if
     // the PLL is disabled — CE will be driven low for disabled PLLs).
+    sendJsonMessage("debug", "checkpoint_before_adf1_begin_spi_pins");
     adf1.begin();
+    sendJsonMessage("debug", "checkpoint_after_adf1_begin");
     adf2.begin();
+    sendJsonMessage("debug", "checkpoint_after_adf2_begin");
 
     // Disable CE for PLLs that are turned off in the runtime config.
     if (!g_adf1Enabled) {
@@ -1284,7 +1341,9 @@ void setup() {
     }
 
     if (g_adf1Enabled) {
+        sendJsonMessage("debug", "checkpoint_before_adf1_program");
         adf1.program(adf1_regs);
+        sendJsonMessage("debug", "checkpoint_adf1_written");
         adf1_attempts = 1;
         delay(100);
         {
@@ -1298,7 +1357,9 @@ void setup() {
     }
 
     if (g_adf2Enabled) {
+        sendJsonMessage("debug", "checkpoint_before_adf2_program");
         adf2.program(adf2_regs);
+        sendJsonMessage("debug", "checkpoint_adf2_written");
         adf2_attempts = 1;
         delay(100);
         {
@@ -1310,6 +1371,7 @@ void setup() {
             Serial.println();
         }
     }
+    sendJsonMessage("debug", "checkpoint_after_adf_program_block");
 
     // Allow some time for the ADF VCOs to lock after programming.
     // Wait up to this timeout, polling lock status periodically.

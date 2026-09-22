@@ -64,6 +64,9 @@ class ADF4351Decoded:
     pfd_hz: float
     vco_hz: float
     rf_out_hz: float
+    charge_pump_code: int
+    rf_output_power_code: int
+    noise_mode: NoiseMode
 
 
 class ADF4351RegisterCalculator:
@@ -175,9 +178,14 @@ class ADF4351RegisterCalculator:
         ref_div2 = bool((r2 >> 24) & 0x1)
         r_counter = (r2 >> 14) & 0x03FF
         r_counter = r_counter if r_counter > 0 else 1
+        charge_pump_code = (r2 >> 9) & 0x0F
 
         rf_div_sel = (r4 >> 20) & 0b111
         rf_divider = 1 << rf_div_sel
+        rf_output_power_code = (r4 >> 3) & 0b11
+
+        noise_mode_bits = (r2 >> 29) & 0b11
+        noise_mode: NoiseMode = "low_noise" if noise_mode_bits == 0b00 else "low_spur"
 
         pfd_hz = (ref_hz * (2.0 if ref_doubler else 1.0)) / (
             r_counter * (2.0 if ref_div2 else 1.0)
@@ -197,6 +205,9 @@ class ADF4351RegisterCalculator:
             pfd_hz=pfd_hz,
             vco_hz=vco_hz,
             rf_out_hz=rf_out_hz,
+            charge_pump_code=charge_pump_code,
+            rf_output_power_code=rf_output_power_code,
+            noise_mode=noise_mode,
         )
 
     @classmethod

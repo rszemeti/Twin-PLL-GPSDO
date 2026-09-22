@@ -101,6 +101,9 @@ class PLLConfigDialog(QDialog):
         default_ref_mhz=10.0,
         default_r_counter=5,
         default_integer_n=True,
+        default_rf_output_power_code=3,
+        default_charge_pump_code=7,
+        default_noise_mode='low_noise',
         parent=None,
     ):
         super().__init__(parent)
@@ -142,12 +145,12 @@ class PLLConfigDialog(QDialog):
         self.rf_power.addItem('-1 dBm', 1)
         self.rf_power.addItem('+2 dBm', 2)
         self.rf_power.addItem('+5 dBm', 3)
-        self.rf_power.setCurrentIndex(3)
+        self.rf_power.setCurrentIndex(default_rf_output_power_code)
 
         self.noise_mode = QComboBox()
         self.noise_mode.addItem('Low noise', 'low_noise')
         self.noise_mode.addItem('Low spur', 'low_spur')
-        self.noise_mode.setCurrentIndex(0)
+        self.noise_mode.setCurrentIndex(self.noise_mode.findData(default_noise_mode))
 
         self.charge_pump = QComboBox()
         cp_items = [
@@ -158,7 +161,7 @@ class PLLConfigDialog(QDialog):
         ]
         for label, code in cp_items:
             self.charge_pump.addItem(label, code)
-        self.charge_pump.setCurrentIndex(7)
+        self.charge_pump.setCurrentIndex(default_charge_pump_code)
 
         self.channel_step = QLabel('-')
         self.channel_step.setStyleSheet('color: #aeb7c2; font-weight: 600;')
@@ -1511,6 +1514,9 @@ class MainWindow(QWidget):
             decoded = ADF4351RegisterCalculator.decode_registers(regs, ref_hz=self.decode_ref_hz)
             defaults['freq_mhz'] = decoded.rf_out_hz / 1_000_000.0
             defaults['integer_n'] = decoded.frac_value == 0
+            defaults['rf_output_power_code'] = decoded.rf_output_power_code
+            defaults['charge_pump_code'] = decoded.charge_pump_code
+            defaults['noise_mode'] = decoded.noise_mode
         except Exception:
             pass
 
@@ -1606,6 +1612,9 @@ class MainWindow(QWidget):
             default_ref_mhz=suggested['ref_mhz'],
             default_r_counter=suggested['r_counter'],
             default_integer_n=suggested['integer_n'],
+            default_rf_output_power_code=suggested['rf_output_power_code'],
+            default_charge_pump_code=suggested['charge_pump_code'],
+            default_noise_mode=suggested['noise_mode'],
             parent=self,
         )
         if dlg.exec() != QDialog.Accepted:
